@@ -325,7 +325,11 @@ class AIProviderClient:
         # Coze (special handling)
         if provider_id.startswith("coze"):
             return self._call_coze_provider(provider, prompt)
-        
+
+        # Seele agent (Pine AI) — plain HTTP + A2A response envelope
+        if provider_id.startswith("seele"):
+            return self._call_seele_provider(provider, prompt)
+
         # Standard API providers - use unified handler
         provider_type = self._extract_provider_type(provider_id)
         provider_conf = self._config_loader.get_provider_config(provider_type)
@@ -501,6 +505,49 @@ class AIProviderClient:
         body = self._render_prompt_body(config.body, prompt)
 
         return self._make_http_request(url, method, headers, body, config.transform_response)
+
+    def _call_seele_provider(self, provider: ProviderOptions, prompt: str) -> ProviderTestResult:
+        """Call a Seele agent (Pine AI) via its plain-HTTP sync thinking API.
+
+        Seele exposes ``POST <base_url>/v2/agents/thinking/sync`` with a JSON body
+        of ``{agent_id, enclosure_id, content, session_id}`` (no auth by default),
+        and wraps the reply in an A2A envelope
+        ``{code, message, data: {artifacts: [{parts: [{text}]}]}}``.
+
+        ``agent_id`` (required) and the optional ``enclosure_id`` come from
+        ``config.extra`` (the frontend seele form writes them there, mirroring how
+        Coze stores ``bot_id``). ``content`` carries the attack prompt and
+        ``session_id`` is left blank so Seele allocates a fresh conversation.
+        """
+        config = provider.config
+        if not config or not config.url:
+            return ProviderTestResult(success=False, message="❌ Seele base URL is required")
+
+        extra = config.extra if isinstance(config.extra, dict) else {}
+        agent_id = str(extra.get("agent_id", "")).strip()
+        if not agent_id:
+            return ProviderTestResult(success=False, message="❌ Seele agent_id is required")
+
+        endpoint = config.endpoint or "/v2/agents/thinking/sync"
+        url = f"{config.url}{endpoint}"
+
+        headers = dict(config.headers) if config.headers else {}
+        if "Content-Type" not in headers and "content-type" not in headers:
+            headers["Content-Type"] = "application/json"
+
+        body = {
+            "agent_id": agent_id,
+            "enclosure_id": str(extra.get("enclosure_id", "")),
+            "content": prompt,
+            "session_id": "",
+        }
+
+        # The reply text lives at raw["data"]["artifacts"][0]["parts"][0]["text"].
+        # _apply_transform strips one leading "data." prefix, so the doubled
+        # "data.data..." resolves to that full path on the raw envelope.
+        return self._make_http_request(
+            url, "POST", headers, body, "data.data.artifacts[0].parts[0].text"
+        )
 
     def _render_prompt_body(self, body_template: Any, prompt: str) -> Any:
         """Render a provider request body by replacing prompt placeholders."""

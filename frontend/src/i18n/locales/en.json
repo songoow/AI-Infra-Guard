@@ -809,6 +809,17 @@
       "content": "Selecting multiple datasets or attack methods will consume a significant amount of tokens. Please proceed with caution.",
       "cancel": "Cancel",
       "confirm": "Continue"
+    },
+    "skillSelection": {
+      "defaultRules": "Default rules",
+      "rules": "Rules",
+      "recommended": "Recommended",
+      "selectAll": "Select all",
+      "clear": "Clear",
+      "recommendedBadge": "Rec",
+      "emptyHint": "With none selected, the default recommended rule set runs",
+      "empty": "No detection rules available",
+      "tooltip": "Select detection rules (targeted or full-coverage)"
     }
   },
   "language": {

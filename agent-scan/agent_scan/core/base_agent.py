@@ -17,6 +17,7 @@
 # documentation or user interface, as detailed in the NOTICE file.
 
 import json
+import re
 import uuid
 from typing import Optional
 
@@ -259,12 +260,26 @@ class BaseAgent:
                 # to produce a clean, structured final report.
                 result = await self._format_final_output()
             else:
-                # Skill workers: the last assistant turn already contains the
-                # <vuln> XML blocks emitted just before the finish() call.
-                # brief_content is only a plain-text summary (no XML) — always
-                # use the full assistant message so _extract_vuln_blocks() can
-                # find the <vuln> tags.
-                result = self.history[-1].get("content", "")
+                # Skill workers: harvest every <vuln> block across all assistant
+                # turns.  The XML is usually emitted in the same turn as the
+                # finish() call, but a worker may emit findings in an earlier
+                # turn and only call finish() later — scanning the full history
+                # avoids dropping those findings (finish()'s own content is just
+                # a plain-text summary with no XML).  Fall back to the last
+                # assistant message when no <vuln> block exists (e.g. the worker
+                # found nothing), preserving the original behaviour.
+                vuln_blocks = [
+                    block
+                    for message in self.history
+                    if message.get("role") == "assistant"
+                    for block in re.findall(
+                        r"<vuln>.*?</vuln>", message.get("content", "") or "", re.DOTALL
+                    )
+                ]
+                if vuln_blocks:
+                    result = "\n\n".join(vuln_blocks)
+                else:
+                    result = self.history[-1].get("content", "")
             logger.info("Finish tool called, final result formatted.")
             scanLogger.status_update(self.step_id, description, "", "completed")
             scanLogger.action_log(tool_id, tool_name, self.step_id, result)

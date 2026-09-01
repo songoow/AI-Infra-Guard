@@ -35,6 +35,27 @@ import re
 SKILLS_DIR = os.path.join(base_dir, "prompt", "skills")
 
 
+def _parse_frontmatter_lines(text: str) -> Dict[str, Any]:
+    """容错的逐行 frontmatter 解析，用于 YAML 严格解析失败时的回退。
+
+    只提取顶层的 `key: value` 标量（如 name/description）。当某个字段的值
+    未加引号却包含冒号（例如 ``description: Detect risks: foo``）时，标准
+    YAML 会解析失败，此函数以第一个冒号切分，保证单个格式不规范的 SKILL.md
+    不会中断整个技能枚举。
+    """
+    meta: Dict[str, Any] = {}
+    for line in text.split('\n'):
+        stripped = line.strip()
+        if not stripped or stripped.startswith('#') or ':' not in stripped:
+            continue
+        key, _, value = stripped.partition(':')
+        key = key.strip()
+        value = value.strip().strip('"\'')
+        if key:
+            meta[key] = value
+    return meta
+
+
 def parse_skill_file(file_path: str) -> Dict[str, Any]:
     """解析带有 YAML Frontmatter 的 Skill 文件"""
     if not os.path.exists(file_path):
@@ -54,7 +75,12 @@ def parse_skill_file(file_path: str) -> Dict[str, Any]:
 
     if match:
         yaml_content = match.group(1)
-        meta = yaml.safe_load(yaml_content) or {}
+        try:
+            meta = yaml.safe_load(yaml_content) or {}
+        except yaml.YAMLError:
+            # Frontmatter 不是严格合法的 YAML（常见于未加引号且含冒号的
+            # description）。回退到容错行解析，避免单个 SKILL.md 破坏枚举。
+            meta = _parse_frontmatter_lines(yaml_content)
         # 获取 body：从匹配结束位置开始
         body = content[match.end():].strip()
 

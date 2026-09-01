@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/Tencent/AI-Infra-Guard/common/utils"
 )
@@ -48,6 +49,11 @@ func (m *AgentTask) Execute(ctx context.Context, request TaskRequest, callbacks 
 	type AgentScanParams struct {
 		AgentData string    `json:"agent_data"` // yaml content from dispatchTask
 		EvalModel EvalModel `json:"eval_model"`
+		// Skills is the optional set of detection rules to run. Empty means
+		// "use the agent-scan default detection set" (see _DETECTION_SKILLS).
+		// A non-empty list runs exactly those rules (selective or full-coverage
+		// scanning), passed through to main.py via --skills.
+		Skills []string `json:"skills"`
 	}
 
 	var params AgentScanParams
@@ -102,6 +108,23 @@ func (m *AgentTask) Execute(ctx context.Context, request TaskRequest, callbacks 
 	argv = append(argv, "--agent_provider", tmpFile.Name())
 	argv = append(argv, "--language", language)
 	argv = append(argv, "--aig-mode")
+
+	// Forward the selected detection rules. Sanitise each name (drop blanks and
+	// path separators) so a malformed request cannot influence skill resolution.
+	// When empty, main.py falls back to the default detection set.
+	if len(params.Skills) > 0 {
+		cleaned := make([]string, 0, len(params.Skills))
+		for _, s := range params.Skills {
+			s = strings.TrimSpace(s)
+			if s == "" || strings.ContainsAny(s, "/\\") {
+				continue
+			}
+			cleaned = append(cleaned, s)
+		}
+		if len(cleaned) > 0 {
+			argv = append(argv, "--skills", strings.Join(cleaned, ","))
+		}
+	}
 
 	// Define task titles
 	taskTitles := []string{

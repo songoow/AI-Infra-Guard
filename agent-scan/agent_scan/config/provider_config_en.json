@@ -26,11 +26,26 @@
         "type": "select",
         "required": true,
         "options": [
-          { "label": "POST", "value": "POST" },
-          { "label": "GET", "value": "GET" },
-          { "label": "PUT", "value": "PUT" },
-          { "label": "PATCH", "value": "PATCH" },
-          { "label": "DELETE", "value": "DELETE" }
+          {
+            "label": "POST",
+            "value": "POST"
+          },
+          {
+            "label": "GET",
+            "value": "GET"
+          },
+          {
+            "label": "PUT",
+            "value": "PUT"
+          },
+          {
+            "label": "PATCH",
+            "value": "PATCH"
+          },
+          {
+            "label": "DELETE",
+            "value": "DELETE"
+          }
         ],
         "defaultValue": "POST",
         "description": "HTTP request method"
@@ -95,8 +110,14 @@
         "type": "select",
         "required": false,
         "options": [
-          { "label": "Chat Messages", "value": "chat" },
-          { "label": "Workflow", "value": "workflow" }
+          {
+            "label": "Chat Messages",
+            "value": "chat"
+          },
+          {
+            "label": "Workflow",
+            "value": "workflow"
+          }
         ],
         "defaultValue": "chat",
         "description": "Chat Messages for conversational apps, Workflow for workflow execution"
@@ -175,8 +196,14 @@
         "type": "select",
         "required": false,
         "options": [
-          { "label": "China (api.coze.cn)", "value": "coze-cn" },
-          { "label": "International (api.coze.com)", "value": "coze-com" }
+          {
+            "label": "China (api.coze.cn)",
+            "value": "coze-cn"
+          },
+          {
+            "label": "International (api.coze.com)",
+            "value": "coze-com"
+          }
         ],
         "defaultValue": "coze-cn",
         "description": "Select the Coze API region"
@@ -231,6 +258,56 @@
         "step": 1000,
         "defaultValue": 120000,
         "description": "Request timeout in milliseconds (default: 120000ms = 2 minutes)"
+      }
+    ]
+  },
+  "seele": {
+    "name": "Seele Agent",
+    "icon": "/images/agents-icon/http.png",
+    "description": "Configure a Seele (Pine AI) agent, tested via the /v2/agents/thinking/sync endpoint",
+    "fields": [
+      {
+        "field": "label",
+        "label": "Agent Name",
+        "type": "text",
+        "required": true,
+        "placeholder": "Name this Seele agent",
+        "description": "Used to identify this config in the list"
+      },
+      {
+        "field": "url",
+        "label": "Seele Base URL",
+        "type": "text",
+        "required": true,
+        "placeholder": "http://127.0.0.1:8086",
+        "description": "Seele service base URL (no path), e.g. http://host:8086"
+      },
+      {
+        "field": "extra.agent_id",
+        "label": "Agent ID",
+        "type": "text",
+        "required": true,
+        "placeholder": "Target Seele agent ID",
+        "description": "Identifier of the Seele agent under test"
+      },
+      {
+        "field": "extra.enclosure_id",
+        "label": "Enclosure ID",
+        "type": "text",
+        "required": false,
+        "placeholder": "Optional, auto-resolved if empty",
+        "description": "Data isolation space; leave blank to auto-resolve"
+      },
+      {
+        "field": "timeout_ms",
+        "label": "Timeout (ms)",
+        "type": "number",
+        "required": false,
+        "min": 1000,
+        "max": 600000,
+        "step": 1000,
+        "defaultValue": 120000,
+        "description": "Seele inference can be slow; 120000+ recommended"
       }
     ]
   },

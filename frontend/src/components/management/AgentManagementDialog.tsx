@@ -107,7 +107,7 @@ const AgentManagementDialog: React.FC = () => {
                   type = first.id || '';
                   config = first.config || {};
                   
-                  if (type === 'http') {
+                  if (type === 'http' || type === 'seele') {
                     baseUrl = config.url || '';
                   } else if (type === 'dify') {
                     baseUrl = config.apiBaseUrl || '';

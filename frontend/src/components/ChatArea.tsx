@@ -127,6 +127,7 @@ const ChatArea: React.FC<ChatAreaProps> = ({ selectedStep, onStepSelect, onMcpRe
   const [selectedEvaluations, setSelectedEvaluations] = useState<EvaluationItem[]>([]);
   const [selectedAgent, setSelectedAgent] = useState<string | undefined>(undefined);
   const [selectedAttackMethods, setSelectedAttackMethods] = useState<string[]>([]);
+  const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
   const [maxEvaluationCount, setMaxEvaluationCount] = useState<number>(-1);
 
   // Message queue related state
@@ -512,6 +513,7 @@ const ChatArea: React.FC<ChatAreaProps> = ({ selectedStep, onStepSelect, onMcpRe
       setSelectedModels([]);
       setMaxEvaluationCount(-1);
       setSelectedAgent(undefined);
+      setSelectedSkills([]);
       setSelectedEvalModel(undefined);
       setSelectedEvaluations([]);
       setHttpHeaders([]);
@@ -796,6 +798,7 @@ const ChatArea: React.FC<ChatAreaProps> = ({ selectedStep, onStepSelect, onMcpRe
     setSelectedModel(undefined);
     setSelectedModels([]);
     setSelectedAgent(undefined);
+      setSelectedSkills([]);
     // Reset the max evaluation total
     setMaxEvaluationCount(-1);
     // Clear the selected evalModel
@@ -868,6 +871,11 @@ const ChatArea: React.FC<ChatAreaProps> = ({ selectedStep, onStepSelect, onMcpRe
       // For an Agent-Scan task, add the agent parameter
       if (taskType === 'Agent-Scan' && selectedAgent) {
         params.agent_id = selectedAgent;
+      }
+
+      // Agent-Scan: forward the selected detection rules; empty means the backend default set
+      if (taskType === 'Agent-Scan' && selectedSkills.length > 0) {
+        params.skills = selectedSkills;
       }
 
       const requestBody = {
@@ -1323,6 +1331,7 @@ const ChatArea: React.FC<ChatAreaProps> = ({ selectedStep, onStepSelect, onMcpRe
       setSelectedModel(undefined);
       setSelectedModels([]);
       setSelectedAgent(undefined);
+      setSelectedSkills([]);
       // Clear the input
       setInput('');
     }
@@ -1436,6 +1445,8 @@ const ChatArea: React.FC<ChatAreaProps> = ({ selectedStep, onStepSelect, onMcpRe
               onEvaluationsSelect={handleEvaluationsSelect}
               selectedAgent={selectedAgent}
               onAgentSelect={handleAgentSelect}
+              selectedSkills={selectedSkills}
+              onSkillsSelect={setSelectedSkills}
               selectedAttackMethods={selectedAttackMethods}
               onAttackMethodsSelect={setSelectedAttackMethods}
               triggerWelcomeAnimation={state.triggerWelcomeAnimation}

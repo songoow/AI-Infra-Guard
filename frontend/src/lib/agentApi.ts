@@ -6,6 +6,14 @@ export interface SaveAgentRequest {
   content: string;
 }
 
+// One selectable agent-scan detection rule (skill).
+export interface AgentSkill {
+  name: string;         // directory name, sent back as a --skills value
+  title: string;        // human-readable label
+  description: string;  // short description of what the rule tests
+  recommended: boolean; // part of the default detection set
+}
+
 export const agentApi = {
   // Get the Agent list
   async getAgentNames(): Promise<ApiResponse<string[]>> {
@@ -66,6 +74,13 @@ export const agentApi = {
   // Get Agent templates
   async getTemplates(language: string = 'en'): Promise<ApiResponse<any>> {
     const response = await fetch(`${KNOWLEDGE_API_BASE_URL}/agent/template?language=${language}`);
+    return response.json();
+  },
+
+  // List the agent-scan detection rules (skills) available for selection.
+  // The endpoint returns { skills: [...] } directly rather than an ApiResponse envelope.
+  async getSkills(): Promise<{ skills: AgentSkill[] }> {
+    const response = await fetch(`${KNOWLEDGE_API_BASE_URL}/agent/skills`);
     return response.json();
   },
 };

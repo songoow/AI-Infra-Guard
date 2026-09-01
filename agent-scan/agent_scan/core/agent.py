@@ -64,6 +64,10 @@ _DETECTION_SKILLS: List[str] = [
     "human-agent-trust-exploit-detection",
 ]
 
+# Skills that are not standalone detection rules and must never be scheduled as
+# a detection worker (the OWASP-ASI classifier only runs in the review stage).
+_CLASSIFIER_SKILLS: frozenset = frozenset({"owasp-asi"})
+
 # Maximum number of skill workers allowed to call ``dialogue()`` simultaneously.
 # Keeps the total RPS to the target agent predictable and avoids rate-limit
 # errors on hosted platforms such as Dify Cloud or Coze.
@@ -88,6 +92,65 @@ def _worker_stage_id(index: int) -> str:
         A string such as ``"2a"``, ``"2b"``, ``"2c"``, ``"2d"``.
     """
     return f"{_WORKER_STAGE_ID_PREFIX}{chr(ord('a') + index)}"
+
+
+def _resolve_skills(requested: Optional[List[str]]) -> List[str]:
+    """Validate caller-requested detection skills against the on-disk catalogue.
+
+    Selecting specific rules (from the UI's rule picker) arrives here as a list
+    of skill directory names.  Unknown names, classifier-only skills, blanks and
+    duplicates are dropped so a malformed selection can never spawn a doomed
+    worker.  When *requested* is empty (or nothing valid survives filtering) the
+    default detection set :data:`_DETECTION_SKILLS` is used, so "no explicit
+    selection" cleanly means "run the recommended rules".
+
+    Args:
+        requested: Skill names chosen by the caller, or ``None``/empty.
+
+    Returns:
+        A de-duplicated, order-preserving list of valid detection skill names.
+    """
+    if not requested:
+        return list(_DETECTION_SKILLS)
+
+    # Enumerate the on-disk catalogue to validate the selection. If enumeration
+    # itself fails, degrade gracefully: skip the existence check and pass the
+    # cleaned names through (a bad name at worst costs one failed worker, which
+    # run_parallel_detection already tolerates) rather than aborting the scan.
+    available: Optional[set] = None
+    try:
+        # Local import avoids any import-time cycle through the tools package.
+        from agent_scan.tools.skill.skill import get_all_skills
+
+        available = {s["name"] for s in get_all_skills()} - _CLASSIFIER_SKILLS
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            f"Could not enumerate available skills ({exc}); skipping existence "
+            f"validation and using the requested names as-is."
+        )
+
+    resolved: List[str] = []
+    seen: set = set()
+    for name in requested:
+        name = (name or "").strip()
+        if not name or name in seen:
+            continue
+        if name in _CLASSIFIER_SKILLS:
+            continue  # never schedule a classifier skill as a detection worker
+        if available is not None and name not in available:
+            logger.warning(f"Ignoring unknown or non-detection skill: {name!r}")
+            continue
+        resolved.append(name)
+        seen.add(name)
+
+    if not resolved:
+        logger.warning(
+            "No valid detection skills after filtering the requested selection; "
+            "falling back to the default detection set."
+        )
+        return list(_DETECTION_SKILLS)
+
+    return resolved
 
 
 def _extract_vuln_blocks(text: str) -> List[str]:
@@ -144,7 +207,14 @@ def _merge_worker_outcomes(
         for tool, count in (stats or {}).items():
             aggregated_stats[tool] = aggregated_stats.get(tool, 0) + count
 
-    merged_xml = "\n\n".join(vuln_blocks) if vuln_blocks else "No vulnerabilities confirmed."
+    # When nothing was found, emit an explicit, language-independent zero-count
+    # signal so the reviewer's "no vulnerabilities" branch triggers reliably in
+    # both zh and en modes (its prompt keys off "High: 0, Medium: 0, Low: 0").
+    merged_xml = (
+        "\n\n".join(vuln_blocks)
+        if vuln_blocks
+        else "No vulnerabilities confirmed. (High: 0, Medium: 0, Low: 0)"
+    )
     return merged_xml, aggregated_stats
 
 
@@ -300,23 +370,29 @@ class ScanPipeline:
                 )
 
         logger.info(
-            f"Starting sequential detection with {len(self.agent_wrapper.skills)} skill workers."
+            f"Starting parallel detection with {len(self.agent_wrapper.skills)} skill workers "
+            f"(max concurrency {_WORKER_CONCURRENCY})."
         )
 
-        outcomes: list = []
-        for idx, skill in enumerate(self.agent_wrapper.skills):
-            try:
-                result = await _run_skill_worker(skill, idx)
-                outcomes.append(result)
-            except Exception as exc:  # noqa: BLE001
-                outcomes.append(exc)
+        # Launch every worker concurrently.  The shared semaphore inside
+        # _run_skill_worker caps how many actually call dialogue() at once, and
+        # return_exceptions=True ensures one failed worker never aborts the scan
+        # (failures are surfaced as Exception elements handled by
+        # _merge_worker_outcomes).
+        outcomes = await asyncio.gather(
+            *(
+                _run_skill_worker(skill, idx)
+                for idx, skill in enumerate(self.agent_wrapper.skills)
+            ),
+            return_exceptions=True,
+        )
 
         merged_xml, aggregated_stats = _merge_worker_outcomes(outcomes, self.agent_wrapper.skills)
 
         confirmed_count = merged_xml.count("<vuln>")
         logger.info(
             f"Parallel detection complete: {confirmed_count} confirmed finding(s) "
-            f"across {len(_DETECTION_SKILLS)} workers."
+            f"across {len(self.agent_wrapper.skills)} workers."
         )
 
         return merged_xml, aggregated_stats
@@ -354,7 +430,7 @@ class Agent:
         self.pipeline = ScanPipeline(self)
         self.language = language
         self.agent_provider: Optional[ProviderOptions] = None
-        self.skills = skills or _DETECTION_SKILLS
+        self.skills = _resolve_skills(skills)
 
         if agent_provider:
             client = AIProviderClient()
@@ -366,7 +442,8 @@ class Agent:
         Pipeline:
 
         1. **Stage 1 — Info Collection**: single sequential agent.
-        2. **Stage 2 — Vulnerability Detection**: single sequential agent.
+        2. **Stage 2 — Vulnerability Detection**: one skill worker per detection
+           skill, all launched concurrently (bounded by ``_WORKER_CONCURRENCY``).
         3. **Stage 3 — Vulnerability Review**: single sequential agent that
            maps findings to OWASP ASI and finalises severity.
 

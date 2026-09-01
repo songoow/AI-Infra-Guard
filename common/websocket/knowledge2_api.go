@@ -1002,3 +1002,125 @@ func HandleAgentTemplate(c *gin.Context) {
 	}
 	c.Data(http.StatusOK, "application/json", data)
 }
+
+// agentScanSkillsDir is the directory (relative to the process CWD, matching the
+// convention used by HandleAgentTemplate) holding one sub-directory per
+// agent-scan detection skill, each with a SKILL.md carrying YAML frontmatter.
+const agentScanSkillsDir = "agent-scan/agent_scan/prompt/skills"
+
+// agentScanClassifierSkills are skills that are NOT standalone detection rules
+// and must be hidden from the rule picker (e.g. the OWASP-ASI classifier only
+// runs in the review stage). Keep in sync with the agent-scan skill catalogue.
+var agentScanClassifierSkills = map[string]bool{
+	"owasp-asi": true,
+}
+
+// agentScanRecommendedSkills mirrors agent_scan.core.agent._DETECTION_SKILLS —
+// the default set executed when the caller does not pick specific rules. Keep
+// this list in sync with that Python constant.
+var agentScanRecommendedSkills = map[string]bool{
+	"data-leakage-detection":                true,
+	"tool-abuse-detection":                  true,
+	"indirect-injection-detection":          true,
+	"authorization-bypass-detection":        true,
+	"web-exfiltration-detection":            true,
+	"agentic-supply-chain-detection":        true,
+	"unexpected-code-execution-detection":   true,
+	"inter-agent-comm-security-detection":   true,
+	"cascading-failure-detection":           true,
+	"human-agent-trust-exploit-detection":   true,
+}
+
+// AgentSkill is one selectable detection rule returned to the frontend.
+type AgentSkill struct {
+	Name        string `json:"name"`        // directory name, passed back as --skills value
+	Title       string `json:"title"`       // human-readable label derived from name
+	Description string `json:"description"` // from SKILL.md frontmatter
+	Recommended bool   `json:"recommended"` // part of the default detection set
+}
+
+// parseSkillFrontmatter extracts the `name` and `description` fields from the
+// leading YAML frontmatter (delimited by a pair of `---` lines) of a SKILL.md.
+func parseSkillFrontmatter(content string) (name, description string) {
+	lines := strings.Split(content, "\n")
+	inFront := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "---" {
+			if !inFront {
+				inFront = true
+				continue
+			}
+			break // end of frontmatter
+		}
+		if !inFront {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "name:") {
+			name = strings.TrimSpace(strings.TrimPrefix(trimmed, "name:"))
+		} else if strings.HasPrefix(trimmed, "description:") {
+			description = strings.TrimSpace(strings.TrimPrefix(trimmed, "description:"))
+		}
+	}
+	return name, description
+}
+
+// titleFromSkillName turns "data-leakage-detection" into "Data Leakage Detection".
+func titleFromSkillName(name string) string {
+	parts := strings.Split(name, "-")
+	for i, p := range parts {
+		if p == "" {
+			continue
+		}
+		parts[i] = strings.ToUpper(p[:1]) + p[1:]
+	}
+	return strings.Join(parts, " ")
+}
+
+// HandleAgentSkills lists the agent-scan detection rules (skills) available for
+// selective or full-coverage scanning. Classifier-only skills are excluded.
+func HandleAgentSkills(c *gin.Context) {
+	entries, err := os.ReadDir(agentScanSkillsDir)
+	if err != nil {
+		gologger.WithError(err).Errorln("read agent-scan skills dir")
+		c.JSON(http.StatusOK, gin.H{"skills": []AgentSkill{}})
+		return
+	}
+
+	skills := make([]AgentSkill, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		dirName := entry.Name()
+		if agentScanClassifierSkills[dirName] {
+			continue
+		}
+		skillFile := filepath.Join(agentScanSkillsDir, dirName, "SKILL.md")
+		raw, readErr := os.ReadFile(skillFile)
+		if readErr != nil {
+			gologger.WithError(readErr).Warningf("skip skill without SKILL.md: %s", dirName)
+			continue
+		}
+		name, description := parseSkillFrontmatter(string(raw))
+		if name == "" {
+			name = dirName // fall back to the directory name
+		}
+		skills = append(skills, AgentSkill{
+			Name:        name,
+			Title:       titleFromSkillName(name),
+			Description: description,
+			Recommended: agentScanRecommendedSkills[name],
+		})
+	}
+
+	// Stable ordering: recommended first, then alphabetical.
+	sort.Slice(skills, func(i, j int) bool {
+		if skills[i].Recommended != skills[j].Recommended {
+			return skills[i].Recommended
+		}
+		return skills[i].Name < skills[j].Name
+	})
+
+	c.JSON(http.StatusOK, gin.H{"skills": skills})
+}

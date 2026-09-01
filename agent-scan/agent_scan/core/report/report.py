@@ -39,6 +39,10 @@ from .models import (
 
 # OWASP ASI category definitions
 ASI_CATEGORIES = {
+    # Fallback bucket for findings the reviewer did not tag with an ASI0X code.
+    # Kept distinct from ASI10 ("Rogue Agents") so unclassified findings are not
+    # misreported as that specific, real category.
+    "ASI00": "Unclassified",
     "ASI01": "Agent Goal Hijack",
     "ASI02": "Tool Misuse & Exploitation",
     "ASI03": "Identity & Privilege Abuse",
@@ -188,7 +192,9 @@ def _extract_asi_from_risk_type(risk_type: str) -> str:
     asi_match = re.search(r'asi0?(\d+)', risk_type, re.IGNORECASE)
     if asi_match:
         return f"ASI{asi_match.group(1).zfill(2)}"
-    return 'ASI10'  # Unclassified
+    # No ASI code present — bucket as Unclassified rather than mislabelling the
+    # finding as ASI10 "Rogue Agents".
+    return 'ASI00'
 
 
 def calculate_security_score(vulnerabilities: List[Dict[str, str]]) -> int:
@@ -345,7 +351,7 @@ def generate_report_from_xml(
         schema_version="agent-security-report@1",
         agent_name=agent_name,
         agent_type=agent_type,
-        # model_name=model_name,
+        model_name=model_name,
         start_time=start_time,
         end_time=end_time,
         plugins=plugins or [],

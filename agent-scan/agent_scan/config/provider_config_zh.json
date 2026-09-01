@@ -26,11 +26,26 @@
         "type": "select",
         "required": true,
         "options": [
-          { "label": "POST", "value": "POST" },
-          { "label": "GET", "value": "GET" },
-          { "label": "PUT", "value": "PUT" },
-          { "label": "PATCH", "value": "PATCH" },
-          { "label": "DELETE", "value": "DELETE" }
+          {
+            "label": "POST",
+            "value": "POST"
+          },
+          {
+            "label": "GET",
+            "value": "GET"
+          },
+          {
+            "label": "PUT",
+            "value": "PUT"
+          },
+          {
+            "label": "PATCH",
+            "value": "PATCH"
+          },
+          {
+            "label": "DELETE",
+            "value": "DELETE"
+          }
         ],
         "defaultValue": "POST",
         "description": "HTTP请求方法"
@@ -95,8 +110,14 @@
         "type": "select",
         "required": false,
         "options": [
-          { "label": "聊天消息", "value": "chat" },
-          { "label": "工作流", "value": "workflow" }
+          {
+            "label": "聊天消息",
+            "value": "chat"
+          },
+          {
+            "label": "工作流",
+            "value": "workflow"
+          }
         ],
         "defaultValue": "chat",
         "description": "聊天消息用于对话应用，工作流用于工作流执行"
@@ -175,8 +196,14 @@
         "type": "select",
         "required": false,
         "options": [
-          { "label": "中国 (api.coze.cn)", "value": "coze-cn" },
-          { "label": "国际 (api.coze.com)", "value": "coze-com" }
+          {
+            "label": "中国 (api.coze.cn)",
+            "value": "coze-cn"
+          },
+          {
+            "label": "国际 (api.coze.com)",
+            "value": "coze-com"
+          }
         ],
         "defaultValue": "coze-cn",
         "description": "选择Coze API区域"
@@ -231,6 +258,56 @@
         "step": 1000,
         "defaultValue": 120000,
         "description": "请求超时时间（毫秒，默认：120000ms = 2分钟）"
+      }
+    ]
+  },
+  "seele": {
+    "name": "Seele Agent",
+    "icon": "/images/agents-icon/http.png",
+    "description": "配置 Seele（Pine AI）Agent，通过 /v2/agents/thinking/sync 接口进行安全检测",
+    "fields": [
+      {
+        "field": "label",
+        "label": "Agent名称",
+        "type": "text",
+        "required": true,
+        "placeholder": "给这个 Seele Agent 起个名字",
+        "description": "用于在列表中标识该配置"
+      },
+      {
+        "field": "url",
+        "label": "Seele服务地址",
+        "type": "text",
+        "required": true,
+        "placeholder": "http://127.0.0.1:8086",
+        "description": "Seele 服务的 base URL（不含路径），如 http://host:8086"
+      },
+      {
+        "field": "extra.agent_id",
+        "label": "Agent ID",
+        "type": "text",
+        "required": true,
+        "placeholder": "目标 Seele Agent 的 ID",
+        "description": "被检测的 Seele Agent 标识"
+      },
+      {
+        "field": "extra.enclosure_id",
+        "label": "数据空间ID",
+        "type": "text",
+        "required": false,
+        "placeholder": "可选，留空自动查找",
+        "description": "enclosure_id 数据隔离空间，可留空"
+      },
+      {
+        "field": "timeout_ms",
+        "label": "超时时间（毫秒）",
+        "type": "number",
+        "required": false,
+        "min": 1000,
+        "max": 600000,
+        "step": 1000,
+        "defaultValue": 120000,
+        "description": "Seele 推理可能较慢，建议 120000 以上"
       }
     ]
   },

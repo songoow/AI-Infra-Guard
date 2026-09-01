@@ -188,6 +188,7 @@ func RunWebServer(options *version.Options) {
 				agentConfigs.POST("/connect", HandleAgentConnect)
 				agentConfigs.POST("/prompt_test", HandleAgentPromptTest)
 				agentConfigs.GET("/template", HandleAgentTemplate)
+				agentConfigs.GET("/skills", HandleAgentSkills)
 			}
 			// 算子列表
 			knowledge.GET("/jailbreak", GetJailBreak)

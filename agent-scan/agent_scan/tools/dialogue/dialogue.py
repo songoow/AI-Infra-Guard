@@ -16,7 +16,7 @@
 # Tencent Zhuque Lab (https://github.com/Tencent/AI-Infra-Guard) in its
 # documentation or user interface, as detailed in the NOTICE file.
 
-import time
+import asyncio
 
 from agent_scan.core.agent_adapter.adapter import AIProviderClient, ProviderTestResult
 from agent_scan.tools.registry import register_tool
@@ -30,13 +30,19 @@ _RETRY_DELAY_SECONDS: float = 2.0
 
 
 @register_tool
-def dialogue(prompt: str = None, context: ToolContext = None) -> str:
+async def dialogue(prompt: str = None, context: ToolContext = None) -> str:
     """Send a single-turn message to the target agent and return its response.
 
     Retries once on transient failures (timeout, 5xx network errors) to reduce
     false-negative rates caused by intermittent connectivity.  Client errors
     (HTTP 4xx) are not retried because they indicate a request-level problem
     (e.g. invalid prompt encoding) that a retry will not fix.
+
+    ``call_provider`` performs a blocking (synchronous ``httpx.Client``) request,
+    so it is dispatched via :func:`asyncio.to_thread`.  This keeps the event loop
+    free while the target agent is responding, which is what allows the parallel
+    skill workers in ``ScanPipeline.run_parallel_detection`` to overlap their
+    target round-trips instead of serialising on a single blocking call.
 
     Returns:
         The agent's response text, or an error description string (prefixed
@@ -46,7 +52,7 @@ def dialogue(prompt: str = None, context: ToolContext = None) -> str:
     last_result: ProviderTestResult | None = None
 
     for attempt in range(_MAX_RETRIES + 1):
-        last_result = context.call_provider(prompt)
+        last_result = await asyncio.to_thread(context.call_provider, prompt)
         logger.info(f"Dialogue result: {last_result}")
 
         if last_result.success:
@@ -65,7 +71,7 @@ def dialogue(prompt: str = None, context: ToolContext = None) -> str:
             f"Dialogue attempt {attempt + 1} failed (transient), "
             f"retrying in {_RETRY_DELAY_SECONDS}s: {error_msg}"
         )
-        time.sleep(_RETRY_DELAY_SECONDS)
+        await asyncio.sleep(_RETRY_DELAY_SECONDS)
 
     # Return a descriptive error string so the skill agent can log and continue
     # rather than silently treating None as an empty response.

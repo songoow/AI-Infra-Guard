@@ -808,6 +808,17 @@
       "content": "当前选择的评测集或攻击方法较多，将消耗大量 Token，请谨慎选择。",
       "cancel": "取消",
       "confirm": "继续"
+    },
+    "skillSelection": {
+      "defaultRules": "默认规则",
+      "rules": "检测规则",
+      "recommended": "推荐",
+      "selectAll": "全选",
+      "clear": "清空",
+      "recommendedBadge": "推荐",
+      "emptyHint": "未选择时将运行默认推荐规则集",
+      "empty": "暂无可用检测规则",
+      "tooltip": "选择检测规则（可针对性测试或全量检测）"
     }
   },
   "language": {

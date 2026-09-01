@@ -6,6 +6,7 @@ import { Button } from '../ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
 import { Send, Paperclip, AtSign, X, Database, Settings, Check, BookOpen, Upload, ShieldQuestion, Clock, Star, Bot, Loader2, Sparkles, ShieldAlert, Grid, RefreshCw } from 'lucide-react';
 import AttackMethodSelector from './AttackMethodSelector';
+import SkillSelector from './SkillSelector';
 import { MCPService, EvaluationItem } from '../../types';
 import { modelApi } from '../../lib/modelApi';
 import { agentApi } from '../../lib/agentApi';
@@ -61,6 +62,8 @@ interface FloatingInputAreaProps {
   onEvaluationsSelect?: (evaluations: EvaluationItem[]) => void;
   selectedAgent?: string;
   onAgentSelect?: (agent: string) => void;
+  selectedSkills?: string[];
+  onSkillsSelect?: (skills: string[]) => void;
   selectedAttackMethods?: string[];
   onAttackMethodsSelect?: (methods: string[]) => void;
   triggerWelcomeAnimation?: boolean;
@@ -172,6 +175,8 @@ const FloatingInputArea: React.FC<FloatingInputAreaProps> = ({
   onEvaluationsSelect,
   selectedAgent,
   onAgentSelect,
+  selectedSkills = [],
+  onSkillsSelect,
   selectedAttackMethods = [],
   onAttackMethodsSelect,
   triggerWelcomeAnimation = false,
@@ -2143,6 +2148,13 @@ const FloatingInputArea: React.FC<FloatingInputAreaProps> = ({
                   </TooltipContent>
                 </Tooltip>
               )}
+
+              {/* Detection rule selector - only shown in Agent-Scan mode */}
+              <SkillSelector
+                taskType={taskType}
+                selectedSkills={selectedSkills}
+                onSkillsSelect={onSkillsSelect || (() => {})}
+              />
 
               {/* Model selection button - shown only for specific task types */}
               {shouldShowModelButtonLocal && (
