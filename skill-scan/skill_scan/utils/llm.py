@@ -22,6 +22,7 @@ import time
 
 import openai
 
+from skill_scan.utils.config import get_env
 from skill_scan.utils.loging import logger
 
 
@@ -33,6 +34,7 @@ class LLM:
         base_url: str,
         context_window: int | None = None,
         default_headers: dict | None = None,
+        stream_timeout: float = 300,
     ):
         self.model = model
         self.model_name = model
@@ -45,6 +47,7 @@ class LLM:
             default_headers=default_headers if default_headers else None,
         )
         self.context_window = context_window
+        self.stream_timeout = stream_timeout
 
     def chat(self, message: list[dict], p=False, ret_usage=False) -> str | tuple[str, dict]:
         ret = ""
@@ -71,17 +74,34 @@ class LLM:
         return ret
 
     def chat_stream(self, message: list[dict]) -> tuple[str, dict]:
+        started = time.monotonic()
+        request_options = {}
+        reasoning_effort = (get_env("REASONING_EFFORT") or "").strip()
+        if reasoning_effort:
+            request_options["reasoning_effort"] = reasoning_effort
         response = self.client.chat.completions.create(
             model=self.model,
             messages=message,
             stream=True,
             stream_options={"include_usage": True},
+            **request_options,
         )
 
         ret = ""
         usage = None
 
         for chunk in response:
+            # A provider may keep a broken stream alive with empty heartbeat
+            # chunks. The SDK read timeout resets for every chunk, so enforce
+            # a deadline for the complete response as well.
+            deadline = getattr(self, "stream_timeout", 300)
+            if time.monotonic() - started > deadline:
+                close = getattr(response, "close", None)
+                if close:
+                    close()
+                raise TimeoutError(
+                    f"LLM streaming response exceeded the {deadline}-second deadline"
+                )
             _usage = getattr(chunk, "usage", None)
             if _usage:
                 usage = self._normalize_usage(_usage)

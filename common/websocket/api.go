@@ -49,6 +49,11 @@ type ModelParams struct {
 	Token   string `json:"token" example:"sk-xxx"`                       // API access token
 	Model   string `json:"model" example:"gpt-4"`                        // Model name
 	Limit   int    `json:"limit,omitempty" example:"1000"`               // Request limit
+
+	// ExtraHeaders are sent with every model request, e.g. OpenRouter's X-Title
+	ExtraHeaders map[string]string `json:"extra_headers,omitempty" example:"{\"X-Title\":\"AI-Infra-Guard\"}"`
+	// ExtraBody is merged into the request body; keys may be dotted paths like provider.order
+	ExtraBody map[string]any `json:"extra_body,omitempty" example:"{\"provider.order\":[\"anthropic\"]}"`
 }
 
 // MCPTaskRequest represents MCP task request structure
@@ -108,6 +113,19 @@ type AgentScanTaskRequest struct {
 	EvalModel   ModelParams `json:"eval_model"`                                                           // Evaluation model config - optional, falls back to system default
 	Language    string      `json:"language,omitempty" example:"zh"`                                      // Language code - optional
 	Prompt      string      `json:"prompt,omitempty" example:"Focus on privilege escalation and data leakage risks"` // Additional scan instructions - optional
+}
+
+// SkillScanTaskRequest represents Skill security scan task request structure
+// @Description Skill security scan task parameters. Supports source-code scan (via attachments) or GitHub repository URL scan.
+type SkillScanTaskRequest struct {
+	Prompt string `json:"prompt,omitempty" example:"https://github.com/user/skill-project or scan description"` // GitHub repo URL or scan description
+	Model  struct {
+		Model   string `json:"model,omitempty" example:"gpt-4"`                         // Model name - optional, falls back to system default
+		Token   string `json:"token,omitempty" example:"sk-xxx"`                        // API key - optional, falls back to system default
+		BaseUrl string `json:"base_url,omitempty" example:"https://api.openai.com/v1"` // Base URL - optional
+	} `json:"model,omitempty"` // Model configuration - optional, falls back to system default
+	Language    string `json:"language,omitempty" example:"zh"`           // Language code - optional
+	Attachments string `json:"attachments,omitempty" example:"file1.zip"` // Attachment file path (upload first)
 }
 
 // APIResponse is the common API response structure
@@ -170,10 +188,12 @@ func resolveDefaultTaskAPIModel(tm *TaskManager, username string) (*database.Mod
 
 // SubmitTask is the task creation handler
 // @Summary Create a new task
-// @Description Submit a new task for processing. Supports three types of tasks:
+// @Description Submit a new task for processing. Supports five types of tasks:
 // @Description 1. MCP Scan (mcp_scan): Model Context Protocol security scanning
 // @Description 2. AI Infra Scan (ai_infra_scan): AI infrastructure security scanning
 // @Description 3. Model Redteam Report (model_redteam_report): AI model red team testing
+// @Description 4. Agent Scan (agent_scan): AI agent security scanning
+// @Description 5. Skill Scan (skill_scan): Skill security scanning (source code or GitHub repo)
 // @Description
 // @Description Request Body Examples:
 // @Description
@@ -233,6 +253,35 @@ func resolveDefaultTaskAPIModel(tm *TaskManager, username string) (*database.Mod
 // @Description     },
 // @Description     "prompt": "How to make a bomb?",
 // @Description     "techniques": [""]
+// @Description   }
+// @Description }
+// @Description
+// @Description Agent Scan Task:
+// @Description {
+// @Description   "type": "agent_scan",
+// @Description   "content": {
+// @Description     "agent_config": "provider: dify\nbase_url: ...",
+// @Description     "eval_model": {
+// @Description       "model": "gpt-4",
+// @Description       "token": "sk-xxx",
+// @Description       "base_url": "https://api.openai.com/v1"
+// @Description     },
+// @Description     "language": "en"
+// @Description   }
+// @Description }
+// @Description
+// @Description Skill Scan Task:
+// @Description {
+// @Description   "type": "skill_scan",
+// @Description   "content": {
+// @Description     "prompt": "https://github.com/user/skill-project",
+// @Description     "model": {
+// @Description       "model": "gpt-4",
+// @Description       "token": "sk-xxx",
+// @Description       "base_url": "https://api.openai.com/v1"
+// @Description     },
+// @Description     "language": "zh",
+// @Description     "attachments": "file.zip"
 // @Description   }
 // @Description }
 // @Tags taskapi
@@ -505,6 +554,74 @@ func SubmitTask(c *gin.Context, tm *TaskManager) {
 			Content:        req.Prompt,
 			Attachments:    []string{},
 			Params:         params,
+			CountryIsoCode: req.Language,
+		}
+	case "skill_scan":
+		var req SkillScanTaskRequest
+		err := json.Unmarshal(content.Content, &req)
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"status":  1,
+				"message": "invalid parameters: " + err.Error(),
+				"data":    nil,
+			})
+			return
+		}
+		// If model or token is empty, fall back to system default model
+		if strings.TrimSpace(req.Model.Model) == "" || strings.TrimSpace(req.Model.Token) == "" {
+			defaultModel, err := resolveDefaultTaskAPIModel(tm, username)
+			if err != nil {
+				c.JSON(http.StatusOK, gin.H{
+					"status":  1,
+					"message": "invalid parameters: failed to resolve default model: " + err.Error(),
+					"data":    nil,
+				})
+				return
+			}
+			if defaultModel == nil {
+				c.JSON(http.StatusOK, gin.H{
+					"status":  1,
+					"message": "invalid parameters: model.token is required when no default model is configured",
+					"data":    nil,
+				})
+				return
+			}
+			if strings.TrimSpace(req.Model.Model) == "" {
+				req.Model.Model = defaultModel.Model
+			}
+			if strings.TrimSpace(req.Model.Token) == "" {
+				req.Model.Token = defaultModel.Token
+			}
+			if strings.TrimSpace(req.Model.BaseUrl) == "" {
+				req.Model.BaseUrl = defaultModel.BaseUrl
+			}
+		}
+		// Build task params
+		params := map[string]interface{}{
+			"model": map[string]interface{}{
+				"model":    req.Model.Model,
+				"token":    req.Model.Token,
+				"base_url": req.Model.BaseUrl,
+			},
+		}
+		var attachments []string
+		if req.Attachments != "" {
+			attachments = append(attachments, req.Attachments)
+		}
+
+		// Note: when both prompt and attachments are provided, Content still carries
+		// the prompt URL (used as --prompt CLI arg for context), but attachments take
+		// priority as the scan target — SkillTask.Execute checks len(files) > 0 first.
+		// This mirrors the mcp_scan case behavior.
+		taskReq = TaskCreateRequest{
+			ID:             messageId,
+			SessionID:      sessionId,
+			Username:       username,
+			Task:           agent.TaskTypeSkillScan,
+			Timestamp:      time.Now().UnixMilli(),
+			Content:        req.Prompt,
+			Params:         params,
+			Attachments:    attachments,
 			CountryIsoCode: req.Language,
 		}
 	default:

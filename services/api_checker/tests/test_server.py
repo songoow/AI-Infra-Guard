@@ -107,8 +107,14 @@ class ServerContractTests(unittest.TestCase):
 
     def test_detectable_models_are_unique_and_stable(self):
         models = server._detectable_models()
-        self.assertEqual(29, len(models))
-        self.assertEqual(29, len({item["id"].lower() for item in models}))
+        self.assertEqual(42, len(models))
+        model_ids = {item["id"].lower() for item in models}
+        self.assertEqual(42, len(model_ids))
+        self.assertIn("anthropic/claude-opus-5", model_ids)
+        self.assertIn("google/gemini-2.5-flash", model_ids)
+        self.assertIn("google/gemma-4-31b-it", model_ids)
+        self.assertIn("z-ai/glm-5.3", model_ids)
+        self.assertIn("glm-5.3-flash", model_ids)
         self.assertIn(models[0]["provider"], {"anthropic", "openai_compatible"})
 
     def test_models_api_describes_supported_algorithms(self):
@@ -341,6 +347,42 @@ class ServerContractTests(unittest.TestCase):
         self.assertEqual(
             ("https://api.example.test/v1", "https://api.example.test"),
             server.anthropic_bases("https://api.example.test/v1"),
+        )
+        self.assertEqual(
+            ("https://api.example.test/v1", "https://api.example.test"),
+            server.anthropic_bases(
+                "https://api.example.test/v1/messages"
+            ),
+        )
+
+    def test_claude_audit_uses_anthropic_models_protocol(self):
+        request = server.DetectRequest(
+            algorithm="quick",
+            base_url="https://api.example.test/v1/messages",
+            api_key="secret",
+            model="claude-opus-5",
+        )
+        audit_result = {
+            "score": 0,
+            "verdict": "LOW",
+            "probe_results": [],
+            "findings": [],
+            "resolved_model": "claude-opus-5",
+        }
+
+        with patch.object(
+            server,
+            "run_relay_audit",
+            return_value=audit_result,
+        ) as audit:
+            server._run_audit(
+                request,
+                "https://api.example.test/v1",
+            )
+
+        self.assertEqual(
+            "anthropic",
+            audit.call_args.kwargs["models_api_type"],
         )
 
     def test_request_rejects_non_http_url(self):
@@ -684,6 +726,37 @@ class ServerContractTests(unittest.TestCase):
             100.0,
         )
 
+        weighted_identity_risk = {
+            "verdict": "LOW",
+            "_risk_score": 15,
+            "findings": [{
+                "probe": "identity",
+                "severity": "LOW",
+                "title": "Model identity family mismatch",
+            }],
+            "probe_results": [{
+                "name": "identity",
+                "ok": True,
+                "data": {
+                    "status": 200,
+                    "identity_text": "I am GPT-5.",
+                    "requested_families": ["anthropic"],
+                    "identity_families": ["openai"],
+                },
+            }],
+        }
+        self.assertEqual(85.0, server._audit_score(weighted_identity_risk))
+        self.assertEqual(
+            85.0,
+            server._result_score("quick", {"audit": weighted_identity_risk}),
+        )
+        self.assertEqual(
+            "risk",
+            server._overall_verdict(
+                "quick", {"audit": weighted_identity_risk}, {},
+            ),
+        )
+
         inconsistent_audit = {
             "verdict": "HIGH",
             "_risk_score": 0,
@@ -806,7 +879,11 @@ class ServerContractTests(unittest.TestCase):
         )
 
         with (
-            patch.object(server, "_run_audit", return_value=audit),
+            patch.object(
+                server,
+                "_run_audit",
+                return_value=audit,
+            ) as audit_call,
             patch.object(
                 server,
                 "_run_signature",
@@ -819,6 +896,7 @@ class ServerContractTests(unittest.TestCase):
             "claude-sonnet-5",
             signature_call.call_args.args[0].model,
         )
+        self.assertEqual("anthropic", audit_call.call_args.args[4])
         self.assertNotIn("_resolved_model", result["detail"])
 
     def test_quick_claude_progress_combines_actual_requests(self):

@@ -34,6 +34,11 @@
     </a>
 </p>
 <p align="center">
+    <a href="https://github.com/openclaw/clawscan" target="_blank">
+       <img src="https://img.shields.io/badge/OpenClaw-Recommended-ff6b6b" alt="OpenClaw Recommended">
+    </a>
+</p>
+<p align="center">
   <a href="https://trendshift.io/repositories/13637" target="_blank"><picture><source media="(prefers-color-scheme: dark)" srcset="https://trendshift.io/api/badge/repositories/13637"><source media="(prefers-color-scheme: light)" srcset="https://trendshift.io/api/badge/repositories/13637"><img src="https://trendshift.io/api/badge/repositories/13637" alt="Tencent%2FAI-Infra-Guard | Trendshift" width="250" height="55"/></picture></a>&nbsp;
   <a href="https://www.blackhat.com/eu-25/arsenal/schedule/index.html#aigai-infra-guard-48381" target="_blank"><img src="../img/blackhat.png" alt="Tencent%2FAI-Infra-Guard | blackhat" width="175" height="55"/></a>&nbsp;
   <a href="https://github.com/deepseek-ai/awesome-deepseek-integration" target="_blank"><img src="../img/awesome-deepseek.png" alt="Tencent%2FAI-Infra-Guard | awesome-deepseek-integration" width="273" height="55"/></a>
@@ -66,11 +71,11 @@ A.I.Gの改善にご協力ください！3〜5分で[ユーザーフィードバ
 
 ## 🚀 最新情報
 
+- **2026-09-17** · [v4.6.2](https://github.com/Tencent/AI-Infra-Guard/releases/tag/v4.6.2) — 脆弱性ライブラリに 155 件の新規 CVE ルールを追加し、40+ の AI コンポーネントをカバー（LangFlow、n8n、PraisonAI、vLLM、llama-cpp、MLflow など）；Skill-Scan の精度向上（証拠のない誤検出を削減、ストリーミング応答のストール防止）；新規エージェント制御不能ベンチマーク（FORGE-Bench、RogueHandoff-20）。
+- **2026-09-10** · [v4.6.1](https://github.com/Tencent/AI-Infra-Guard/releases/tag/v4.6.1) — API Checker：モデルフィンガープリントのカバレッジ拡張（Gemini 2.5/3.1、Gemma 2/3/4、GLM-5.3 と GLM-5.3-Flash）；MCP スキャンの信頼性向上：空/不完全なスキャン結果のマーク付け、コンテキスト圧縮時のセキュリティ検出保持、接続エラーの可視化；誤ラベルの CVE 製品名を修正。
+- **2026-08-26** · [v4.6.0](https://github.com/Tencent/AI-Infra-Guard/releases/tag/v4.6.0) — LLM API ポイズニング検出（マルチプローブ ブラックボックス監査でモデルすり替え・バックドア リスクを識別）；Agent-Scan v5.0.0 変異エンジン リファクタリング；脆弱性ライブラリが 146 AI コンポーネント・2000+ CVE ルールに拡大；MCP/Skill スキャンの安定性と互換性のバグ修正。
 - **2026-08-17** · [v4.5.2](https://github.com/Tencent/AI-Infra-Guard/releases/tag/v4.5.2) — Skill-Scan：.pyc バイトコードバイパス検出 + 文字セットスマグリング防御；MCP-Scan：ダイナミックモードでツールホワイトリストによる RCE 防止；新規 SkillJack 研究プロジェクト；脆弱性ライブラリを 2000+ CVE ルールに拡大。
 - **2026-07-30** · [v4.5.1](https://github.com/Tencent/AI-Infra-Guard/releases/tag/v4.5.1) — Jailbreak Evaluation：4種のマルチターン脱獄攻撃追加（Many-Shot、PAIR、GOAT、ActorAttack）；Agent-Scan：5つの新OWASP検出スキル + Webデータ流出検出（計10スキル）；MCP-Scan：4つの新セキュリティルール
-- **2026-07-27** · [v4.5.0](https://github.com/Tencent/AI-Infra-Guard/releases/tag/v4.5.0) — AIセキュリティスキル市場公開（公式Skill 3種）；フロントエンド全面オープンソース化；Skillスキャンエンジン強化（9種リスク検出、SkillTrustBench最高0.9848）；Skill/MCP/Agentスキャン独立CLI化；脆弱性ライブラリ130コンポーネント・1888ルールに拡大
-- **2026-06-25** · [v4.1.15](https://github.com/Tencent/AI-Infra-Guard/releases/tag/v4.1.15) — MCP スキャンにツールポイズニング・診情窃取・コマンドインジェクションの3件の脆弱性検知ルールを追加；llama.cpp CVEルール6件追加；`model.token`の省略対応（システムデフォルトモデルにフォールバック）。
-- **2026-06-18** · [v4.1.14](https://github.com/Tencent/AI-Infra-Guard/releases/tag/v4.1.14) — Prompt Security：9 種の新規シングルターン警戒オペレーター追加；包括的な Agent レッドチーム評価に対応する新規 `aig-agent-redteam` skill を追加。
 
 👉 [過去のリリース](../CHANGELOG.md) · 🛒 [AIセキュリティスキル市場](https://matrix.tencent.com/skill-market/) · 🔍 [skill-scan CLI](https://github.com/Tencent/AI-Infra-Guard/tree/main/skill-scan) · 🔍 [mcp-scan CLI](https://github.com/Tencent/AI-Infra-Guard/tree/main/mcp-scan) · 🔍 [agent-scan CLI](https://github.com/Tencent/AI-Infra-Guard/tree/main/agent-scan) · 📊 [SkillTrustBench](https://matrix.tencent.com/skilltrustbench/)
 
@@ -87,7 +92,7 @@ A.I.Gの改善にご協力ください！3〜5分で[ユーザーフィードバ
 - [謝辞](#-謝辞)
 - [コミュニティに参加](#-コミュニティに参加)
 - [引用](#-引用)
-- [📚 論文](#-論文)
+- [📚 研究・論文](#-研究・論文)
 - [ライセンスと帰属表示](#️-ライセンスと帰属表示)
 <br><br>
 
@@ -552,9 +557,19 @@ A.I.G プロジェクトに貢献してくださったすべての開発者の�
 ```
 <br>
 
-## 📚 論文
+## 📚 研究・論文
 
-> 📂 **[Research Projects](https://github.com/Tencent/AI-Infra-Guard/tree/main/Research)** — 研究成果のオープンソースコード、データセット、成果物。
+**Research:**
+
+1. **"RogueHandoff-20: Measuring Susceptibility to Unsafe Agent Trajectories"** — 前置状態として与えられた安全でないトラジェクトリをエージェントが採用するかを測定する Docker ベースのベンチマーク。他のエージェントの安全でない戦略に暴露された後の易感性をテストします。[[code]](../Research/roguehandoff20)
+
+2. **"FORGE-Bench: A Deterministic Benchmark for Loss of Control in Autonomous Agents"** — 自律エージェントが正当なタスクを遂行する中で制御を失うプロセスを研究する、決定論的でオラクルベースのベンチマーク。目標圧力、制約の劣化、安全でない機会を 16 ドメイン・1,800 トラジェクトリで評価します。[[arXiv]](https://arxiv.org/abs/2609.11024) [[code]](../Research/forge_bench)
+
+3. **"DeepSeek Harness Indirect Prompt-Injection Assessment"** — DeepSeek Harness に対する認可済みセキュリティ評価。14,560 回のエージェント実行における間接プロンプトインジェクションテスト。[[code]](../Research/deepseek-harness-security-assessment)
+
+4. **"SkillJack: Persistent Skill Backdoors in Self-Evolving Agents"** — ポイズンされたトラジェクトリを通じて自己進化型エージェントスキルシステムに持続的バックドアを注入する方法を実証。[[code]](../Research/SkillJack)
+
+**Papers:**
 
 1. **"Securing the AI Agent: A Unified Framework for Multi-Layer Agent Red Teaming"** — AI エージェントシステムのセキュリティを破る多層レッドチーミングの総合フレームワーク。インフラ、サプライチェーン、ランタイムインタラクション、デプロイメント面をカバー。[[arXiv]](https://arxiv.org/pdf/2606.31227) [[pdf]](../Securing_the_AI_Agent.pdf)
 

@@ -62,6 +62,7 @@ _DETECTION_SKILLS: List[str] = [
     "inter-agent-comm-security-detection",
     "cascading-failure-detection",
     "human-agent-trust-exploit-detection",
+    "memory-rag-poisoning-detection",
 ]
 
 # Skills that are not standalone detection rules and must never be scheduled as

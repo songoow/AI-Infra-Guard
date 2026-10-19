@@ -88,6 +88,19 @@ from deepteam.metrics import (
     IllegalMetric,
 )
 from deepteam.red_teamer.utils import group_attacks_by_vulnerability_type
+from deepteam.red_teamer.progress_log import (
+    DEFAULT_FLUSH_EVERY,
+    DEFAULT_PROGRESS_LOG_PATH,
+    ProgressLog,
+)
+from deepteam.red_teamer.resume import (
+    DEFAULT_ATTACKS_CHECKPOINT_PATH,
+    AttackCheckpoint,
+    build_metadata,
+    case_key,
+    ensure_checkpoint_matches,
+    load_completed_cases,
+)
 from deepteam.red_teamer.risk_assessment import (
     construct_risk_assessment_overview,
     RedTeamingTestCase,
@@ -97,11 +110,46 @@ from deepteam.risks import getRiskCategory
 from deepteam.utils import judge_language
 
 
+def _get_consecutive_rate_limit_failures(model_callback: CallbackType) -> int:
+    """从目标模型实例读取连续限流失败计数（供熔断器判断）
+
+    model_callback 通常是 OpenaiAlikeModel 实例的绑定方法（model.a_generate），
+    计数器维护在模型实例上（由其重试逻辑递增/重置），因此这里通过 __self__
+    取回模型实例并读取，保证熔断器与重试逻辑共享同一份状态。
+    非 bound-method 或模型未暴露计数接口时返回 0（熔断器不生效，保持原行为）。
+    """
+    model = getattr(model_callback, "__self__", None)
+    if model is None:
+        return 0
+    getter = getattr(model, "get_consecutive_rate_limit_failures", None)
+    if callable(getter):
+        try:
+            return int(getter())
+        except Exception:
+            return 0
+    return getattr(model, "_consecutive_rate_limit_failures", 0)
+
+
+def _reset_consecutive_rate_limit_failures(model_callback: CallbackType) -> None:
+    """目标模型成功响应后，重置模型实例上的连续限流失败计数"""
+    model = getattr(model_callback, "__self__", None)
+    if model is None:
+        return
+    resetter = getattr(model, "reset_rate_limit_failures", None)
+    if callable(resetter):
+        try:
+            resetter()
+        except Exception:
+            pass
+
+
 class RedTeamer:
     risk_assessment: Optional[RiskAssessment] = None
     simulated_attacks: Optional[List[SimulatedAttack]] = None
     asyncRandomId: str = None
     max_concurrent = 1
+    # 连续限流失败熔断阈值：被测模型连续多次限流失败后跳过剩余请求
+    rate_limit_circuit_breaker_threshold = 3
     def __init__(
         self,
         simulator_model: Optional[
@@ -110,17 +158,85 @@ class RedTeamer:
         evaluation_model: Optional[Union[str, DeepEvalBaseLLM]] = "gpt-4o",
         target_purpose: Optional[str] = "",
         async_mode: bool = True,
+        progress_log_path: Optional[str] = DEFAULT_PROGRESS_LOG_PATH,
+        progress_flush_every: int = DEFAULT_FLUSH_EVERY,
+        resume: bool = False,
+        attacks_checkpoint_path: Optional[str] = DEFAULT_ATTACKS_CHECKPOINT_PATH,
     ):
         self.target_purpose = target_purpose
         self.simulator_model, _ = initialize_model(simulator_model)
         self.evaluation_model, _ = initialize_model(evaluation_model)
         self.async_mode = async_mode
+        self.progress_log_path = progress_log_path
+        self.progress_flush_every = progress_flush_every
+        self.resume = resume
+        self.attacks_checkpoint_path = attacks_checkpoint_path
+        self._translation_cache: Dict[str, str] = {}
         self.synthetic_goldens: List[Golden] = []
         self.custom_metric = None  # 添加自定义metric属性
         self.attack_simulator = AttackSimulator(
             simulator_model=self.simulator_model,
             purpose=self.target_purpose,
         )
+
+    def _new_progress_log(self) -> ProgressLog:
+        """创建进度落盘器；路径为空时返回空对象（相当于关闭）。"""
+        return ProgressLog(
+            path=self.progress_log_path,
+            flush_every=self.progress_flush_every,
+        )
+
+    def _new_attack_checkpoint(self) -> AttackCheckpoint:
+        """创建攻击检查点；路径为空时为空操作。"""
+        return AttackCheckpoint(path=self.attacks_checkpoint_path)
+
+    def _resumed_attacks(
+        self,
+        vulnerabilities: List[BaseVulnerability],
+        attacks: List[BaseAttack],
+        attacks_per_vulnerability_type: int,
+    ) -> Optional[List[SimulatedAttack]]:
+        """续跑时返回上次落盘的攻击清单，没有可用检查点则返回 None。"""
+        if not self.resume:
+            return None
+        metadata, saved_attacks = self._new_attack_checkpoint().load()
+        if not saved_attacks:
+            logger.debug("No usable attacks checkpoint, starting from scratch")
+            return None
+        ensure_checkpoint_matches(
+            metadata,
+            build_metadata(
+                vulnerabilities,
+                attacks,
+                attacks_per_vulnerability_type,
+                self.target_purpose,
+            ),
+        )
+        return saved_attacks
+
+    def _save_attacks(
+        self,
+        simulated_attacks: List[SimulatedAttack],
+        vulnerabilities: List[BaseVulnerability],
+        attacks: List[BaseAttack],
+        attacks_per_vulnerability_type: int,
+    ) -> None:
+        """把这次模拟出的攻击落盘，供中断后续跑复用。"""
+        self._new_attack_checkpoint().save(
+            simulated_attacks,
+            build_metadata(
+                vulnerabilities,
+                attacks,
+                attacks_per_vulnerability_type,
+                self.target_purpose,
+            ),
+        )
+
+    def _completed_cases(self) -> Dict[str, RedTeamingTestCase]:
+        """续跑时读回已完成的用例；未开启续跑则为空。"""
+        if not self.resume:
+            return {}
+        return load_completed_cases(self.progress_log_path)
 
     def _get_translation_system_message(self) -> str:
         """获取翻译的 system 消息"""
@@ -147,33 +263,73 @@ Direct translation without separators"""
         """获取翻译的 user 提示"""
         return f"Translate to {logger.lang} (output translation only):\n\n{text}"
 
-    def _translate_reason(self, reason: str) -> str:
-        """翻译 reason 文本（同步版本）"""
-        if not isinstance(reason, str) or not reason.strip():
-            return reason
-        if logger.lang == "zh_CN" and judge_language(reason) != "chinese":
+    def _lang_category(self) -> str:
+        lang = (logger.lang or "").lower()
+        if lang.startswith("zh"):
+            return "chinese"
+        if lang.startswith("en"):
+            return "english"
+        return "default"
+
+    def _translate_text(self, text: str) -> str:
+        if not isinstance(text, str) or not text.strip():
+            return text
+        target = self._lang_category()
+        if target == "default":
+            return text
+        detected = judge_language(text)
+        if detected == "default" or detected == target:
+            return text
+        cache_key = f"{target}:{text}"
+        if cache_key in self._translation_cache:
+            return self._translation_cache[cache_key]
+        try:
             system_message = self._get_translation_system_message()
-            user_prompt = self._get_translation_user_prompt(reason)
+            user_prompt = self._get_translation_user_prompt(text)
             messages = [
                 {"role": "system", "content": system_message},
                 {"role": "user", "content": user_prompt}
             ]
-            return self.evaluation_model.generate(messages=messages)
-        return reason
+            translated = self.evaluation_model.generate(messages=messages)
+        except Exception as e:
+            logger.exception(e)
+            return text
+        self._translation_cache[cache_key] = translated
+        return translated
+
+    async def _a_translate_text(self, text: str) -> str:
+        if not isinstance(text, str) or not text.strip():
+            return text
+        target = self._lang_category()
+        if target == "default":
+            return text
+        detected = judge_language(text)
+        if detected == "default" or detected == target:
+            return text
+        cache_key = f"{target}:{text}"
+        if cache_key in self._translation_cache:
+            return self._translation_cache[cache_key]
+        try:
+            system_message = self._get_translation_system_message()
+            user_prompt = self._get_translation_user_prompt(text)
+            messages = [
+                {"role": "system", "content": system_message},
+                {"role": "user", "content": user_prompt}
+            ]
+            translated = await self.evaluation_model.a_generate(messages=messages)
+        except Exception as e:
+            logger.exception(e)
+            return text
+        self._translation_cache[cache_key] = translated
+        return translated
+
+    def _translate_reason(self, reason: str) -> str:
+        """翻译 reason 文本（同步版本）"""
+        return self._translate_text(reason)
 
     async def _a_translate_reason(self, reason: str) -> str:
         """翻译 reason 文本（异步版本）"""
-        if not isinstance(reason, str) or not reason.strip():
-            return reason
-        if logger.lang == "zh_CN" and judge_language(reason) != "chinese":
-            system_message = self._get_translation_system_message()
-            user_prompt = self._get_translation_user_prompt(reason)
-            messages = [
-                {"role": "system", "content": system_message},
-                {"role": "user", "content": user_prompt}
-            ]
-            return await self.evaluation_model.a_generate(messages=messages)
-        return reason
+        return await self._a_translate_text(reason)
 
     def red_team(
         self,
@@ -215,7 +371,13 @@ Direct translation without separators"""
                 # Initialize metric map
                 metrics_map = self.get_red_teaming_metrics_map(vulnerabilities)
                 # Simulate attacks
-                if (
+                resumed_attacks = self._resumed_attacks(
+                    vulnerabilities, attacks, attacks_per_vulnerability_type,
+                )
+                if resumed_attacks is not None:
+                    simulated_attacks: List[SimulatedAttack] = resumed_attacks
+                    self.simulated_attacks = resumed_attacks
+                elif (
                     reuse_simulated_attacks
                     and self.simulated_attacks is not None
                     and len(self.simulated_attacks) > 0
@@ -234,123 +396,147 @@ Direct translation without separators"""
                             choice=choice,
                         )
                     )
+                    self._save_attacks(
+                        simulated_attacks,
+                        vulnerabilities,
+                        attacks,
+                        attacks_per_vulnerability_type,
+                    )
 
                 vulnerability_type_to_attacks_map = (
                     group_attacks_by_vulnerability_type(simulated_attacks)
                 )
                 red_teaming_test_cases: List[RedTeamingTestCase] = []
-                total_vulnerability_types = sum(
-                    len(v.get_types()) for v in vulnerabilities
-                )
-                pbar = tqdm(
-                    total=total_vulnerability_types,
-                    desc=f"📝 Evaluating {total_vulnerability_types} vulnerability types across {len(vulnerabilities)} vulnerability(s)",
-                )
-                logger.status_update(statusUpdate(stepId="2", brief=logger.translated_msg("Risk Assessment"), description=logger.translated_msg(
-                    "Measure model: {model_name}", model_name=model_name
-                ), status="running"))
+                progress_log = self._new_progress_log()
+                completed_cases = self._completed_cases()
+                try:
+                    total_vulnerability_types = sum(
+                        len(v.get_types()) for v in vulnerabilities
+                    )
+                    pbar = tqdm(
+                        total=total_vulnerability_types,
+                        desc=f"📝 Evaluating {total_vulnerability_types} vulnerability types across {len(vulnerabilities)} vulnerability(s)",
+                    )
+                    logger.status_update(statusUpdate(stepId="2", brief=logger.translated_msg("Risk Assessment"), description=logger.translated_msg(
+                        "Measure model: {model_name}", model_name=model_name
+                    ), status="running"))
 
-                tool_id = uuid.uuid4().hex
-                for idx, (vulnerability_type, simulated_attacks) in enumerate(vulnerability_type_to_attacks_map.items()):
-                    metric: BaseRedTeamingMetric = metrics_map.get(
-                        vulnerability_type
-                    )()
-                    num_simulated_attacks = len(simulated_attacks)
+                    tool_id = uuid.uuid4().hex
+                    for idx, (vulnerability_type, simulated_attacks) in enumerate(vulnerability_type_to_attacks_map.items()):
+                        metric: BaseRedTeamingMetric = metrics_map.get(
+                            vulnerability_type
+                        )()
+                        num_simulated_attacks = len(simulated_attacks)
 
-                    logger.tool_used(toolUsed(stepId="2", tool_id=tool_id, brief=logger.translated_msg(
-                        "Measure {num_simulated_attacks} simulated attacks", num_simulated_attacks=num_simulated_attacks
-                    ), status="todo"))
+                        logger.tool_used(toolUsed(stepId="2", tool_id=tool_id, brief=logger.translated_msg(
+                            "Measure {num_simulated_attacks} simulated attacks", num_simulated_attacks=num_simulated_attacks
+                        ), status="todo"))
                     
-                    for _idx, simulated_attack in enumerate(simulated_attacks):
-                        logger.tool_used(toolUsed(stepId="2", tool_id=tool_id, brief=logger.translated_msg(
-                            "Measure {idx} / {num_simulated_attacks} simulated attacks", idx=_idx+1, num_simulated_attacks=num_simulated_attacks
-                        ), status="doing"))
-                        red_teaming_test_case = RedTeamingTestCase(
-                            vulnerability=simulated_attack.vulnerability,
-                            vulnerability_type=vulnerability_type.value,
-                            attackMethod=simulated_attack.attack_method,
-                            riskCategory=getRiskCategory(vulnerability_type),
-                            original_input=simulated_attack.original_input,
-                            input=simulated_attack.input,
-                        )
-
-                        # this will only go through if ignore_errors == True
-                        if simulated_attack.error:
-                            red_teaming_test_case.error = simulated_attack.error
-                            red_teaming_test_case.reason = logger.translated_msg("The attack simulation phase failed, possibly due to rate limiting or security blocking by the generalization model.")
-                            red_teaming_test_cases.append(red_teaming_test_case)
-                            continue
-                        elif simulated_attack.useless and simulated_attack.attack_method != "RedTeam":
-                            red_teaming_test_case.useless = simulated_attack.useless
-                            red_teaming_test_case.reason = logger.translated_msg("The simulation attack remained unchanged, which may be because it was not applicable to the current input.")
-                            red_teaming_test_cases.append(red_teaming_test_case)
-                            continue
-
-                        logger.tool_used(toolUsed(stepId="2", tool_id=tool_id, brief=logger.translated_msg(
-                            "Generating {idx} / {num_simulated_attacks} output from simulated attacks", idx=_idx+1, num_simulated_attacks=num_simulated_attacks
-                        ), status="doing"))
-
-                        try:
-                            target_output = model_callback(
-                                simulated_attack.input
+                        for _idx, simulated_attack in enumerate(simulated_attacks):
+                            logger.tool_used(toolUsed(stepId="2", tool_id=tool_id, brief=logger.translated_msg(
+                                "Measure {idx} / {num_simulated_attacks} simulated attacks", idx=_idx+1, num_simulated_attacks=num_simulated_attacks
+                            ), status="doing"))
+                            # 续跑时这一条上次已经评过：直接沿用旧结果，
+                            # 不再调用目标模型与评分器
+                            completed_case = completed_cases.get(
+                                case_key(simulated_attack)
                             )
-                            if target_output == "":
-                                raise ValueError("The response is none")
-                            red_teaming_test_case.actual_output = target_output
-                        except Exception as e:
-                            logger.exception(e)
-                            if ignore_errors:
-                                red_teaming_test_case.error = (
-                                    "Error generating output from target LLM"
-                                )
-                                red_teaming_test_case.reason = logger.translated_msg("The model has no output, which could be due to rate limiting or API security blocking.")
-                                red_teaming_test_cases.append(
-                                    red_teaming_test_case
-                                )
+                            if completed_case is not None:
+                                red_teaming_test_cases.append(completed_case)
                                 continue
-                            else:
-                                raise
+                            red_teaming_test_case = RedTeamingTestCase(
+                                vulnerability=simulated_attack.vulnerability,
+                                vulnerability_type=vulnerability_type.value,
+                                attackMethod=simulated_attack.attack_method,
+                                riskCategory=getRiskCategory(vulnerability_type),
+                                original_input=simulated_attack.original_input,
+                                input=simulated_attack.input,
+                            )
 
-                        test_case = LLMTestCase(
-                            input=simulated_attack.input,
-                            actual_output=target_output,
-                        )
-                        logger.tool_used(toolUsed(stepId="2", tool_id=tool_id, brief=logger.translated_msg(
-                            "Evaluating {idx} / {num_simulated_attacks} target LLM output", idx=_idx+1, num_simulated_attacks=num_simulated_attacks
-                        ), status="doing"))
-
-                        try:
-                            metric.language = logger.lang
-                            metric.measure(test_case)
-                            red_teaming_test_case.score = metric.score
-                            reason = self._translate_reason(metric.reason)
-                            red_teaming_test_case.reason = reason
-                        except Exception as e:
-                            logger.exception(e)
-                            if ignore_errors:
-                                red_teaming_test_case.error = f"Error evaluating target LLM output for the '{vulnerability_type.value}' vulnerability"
-                                red_teaming_test_case.reason = logger.translated_msg("An anomaly occurred during the evaluation, which could be due to rate limiting or API security blocking.")
-                                red_teaming_test_cases.append(
-                                    red_teaming_test_case
-                                )
+                            # this will only go through if ignore_errors == True
+                            if simulated_attack.error:
+                                red_teaming_test_case.error = simulated_attack.error
+                                red_teaming_test_case.reason = logger.translated_msg("The attack simulation phase failed, possibly due to rate limiting or security blocking by the generalization model.")
+                                red_teaming_test_cases.append(red_teaming_test_case)
+                                progress_log.record(red_teaming_test_case)
                                 continue
-                            else:
-                                raise
+                            elif simulated_attack.useless and simulated_attack.attack_method != "RedTeam":
+                                red_teaming_test_case.useless = simulated_attack.useless
+                                red_teaming_test_case.reason = logger.translated_msg("The simulation attack remained unchanged, which may be because it was not applicable to the current input.")
+                                red_teaming_test_cases.append(red_teaming_test_case)
+                                progress_log.record(red_teaming_test_case)
+                                continue
 
-                        case_md = self.get_risk_case_markdown(red_teaming_test_case, lang=logger.lang)
-                        if case_md is not None:
-                            logger.action_log(actionLog(tool_id=tool_id, tool_name="Case measure", stepId="2", log=case_md))
-                        pbar.update(1)
-                        red_teaming_test_cases.append(red_teaming_test_case)
+                            logger.tool_used(toolUsed(stepId="2", tool_id=tool_id, brief=logger.translated_msg(
+                                "Generating {idx} / {num_simulated_attacks} output from simulated attacks", idx=_idx+1, num_simulated_attacks=num_simulated_attacks
+                            ), status="doing"))
 
-                    logger.tool_used(toolUsed(stepId="2", tool_id=tool_id, tool_name="Metric measure", brief=logger.translated_msg(
-                        "Measure {num_simulated_attacks} simulated attacks done", num_simulated_attacks=num_simulated_attacks
-                    ), status="done"))
+                            try:
+                                target_output = model_callback(
+                                    simulated_attack.input
+                                )
+                                if target_output == "":
+                                    raise ValueError("The response is none")
+                                red_teaming_test_case.actual_output = target_output
+                            except Exception as e:
+                                logger.exception(e)
+                                if ignore_errors:
+                                    red_teaming_test_case.error = (
+                                        "Error generating output from target LLM"
+                                    )
+                                    red_teaming_test_case.reason = logger.translated_msg("The model has no output, which could be due to rate limiting or API security blocking.")
+                                    red_teaming_test_cases.append(
+                                        red_teaming_test_case
+                                    )
+                                    progress_log.record(red_teaming_test_case)
+                                    continue
+                                else:
+                                    raise
 
-                logger.status_update(statusUpdate(stepId="2", brief=logger.translated_msg("Risk Assessment"), description=logger.translated_msg(
-                    "Measure model: {model_name}", model_name=model_name
-                ), status="completed"))
-                pbar.close()
+                            test_case = LLMTestCase(
+                                input=simulated_attack.input,
+                                actual_output=target_output,
+                            )
+                            logger.tool_used(toolUsed(stepId="2", tool_id=tool_id, brief=logger.translated_msg(
+                                "Evaluating {idx} / {num_simulated_attacks} target LLM output", idx=_idx+1, num_simulated_attacks=num_simulated_attacks
+                            ), status="doing"))
+
+                            try:
+                                metric.language = logger.lang
+                                metric.measure(test_case)
+                                red_teaming_test_case.score = metric.score
+                                reason = self._translate_reason(metric.reason)
+                                red_teaming_test_case.reason = reason
+                            except Exception as e:
+                                logger.exception(e)
+                                if ignore_errors:
+                                    red_teaming_test_case.error = f"Error evaluating target LLM output for the '{vulnerability_type.value}' vulnerability"
+                                    red_teaming_test_case.reason = logger.translated_msg("An anomaly occurred during the evaluation, which could be due to rate limiting or API security blocking.")
+                                    red_teaming_test_cases.append(
+                                        red_teaming_test_case
+                                    )
+                                    progress_log.record(red_teaming_test_case)
+                                    continue
+                                else:
+                                    raise
+
+                            case_md = self.get_risk_case_markdown(red_teaming_test_case, lang=logger.lang)
+                            if case_md is not None:
+                                logger.action_log(actionLog(tool_id=tool_id, tool_name="Case measure", stepId="2", log=case_md))
+                            pbar.update(1)
+                            red_teaming_test_cases.append(red_teaming_test_case)
+                            progress_log.record(red_teaming_test_case)
+
+                        logger.tool_used(toolUsed(stepId="2", tool_id=tool_id, tool_name="Metric measure", brief=logger.translated_msg(
+                            "Measure {num_simulated_attacks} simulated attacks done", num_simulated_attacks=num_simulated_attacks
+                        ), status="done"))
+
+                    logger.status_update(statusUpdate(stepId="2", brief=logger.translated_msg("Risk Assessment"), description=logger.translated_msg(
+                        "Measure model: {model_name}", model_name=model_name
+                    ), status="completed"))
+                    pbar.close()
+                finally:
+                    progress_log.close()
 
                 self.risk_assessment = RiskAssessment(
                     overview=construct_risk_assessment_overview(
@@ -387,7 +573,13 @@ Direct translation without separators"""
             metrics_map = self.get_red_teaming_metrics_map(vulnerabilities)
 
             # Generate attacks
-            if (
+            resumed_attacks = self._resumed_attacks(
+                vulnerabilities, attacks, attacks_per_vulnerability_type,
+            )
+            if resumed_attacks is not None:
+                simulated_attacks: List[SimulatedAttack] = resumed_attacks
+                self.simulated_attacks = resumed_attacks
+            elif (
                 reuse_simulated_attacks
                 and self.simulated_attacks is not None
                 and len(self.simulated_attacks) > 0
@@ -406,6 +598,12 @@ Direct translation without separators"""
                         ignore_errors=ignore_errors,
                         choice=choice,
                     )
+                )
+                self._save_attacks(
+                    simulated_attacks,
+                    vulnerabilities,
+                    attacks,
+                    attacks_per_vulnerability_type,
                 )
 
             # Create a mapping of vulnerabilities to attacks
@@ -433,33 +631,42 @@ Direct translation without separators"""
                 desc=f"📝 Evaluating {num_vulnerability_types} vulnerability types across {len(vulnerabilities)} vulnerability(s)",
             )
             red_teaming_test_cases: List[RedTeamingTestCase] = []
-            logger.status_update(statusUpdate(stepId="2", brief=logger.translated_msg("Risk Assessment"), description=logger.translated_msg(
-                "Measure model: {model_name}", model_name=model_name
-            ), status="running"))
+            progress_log = self._new_progress_log()
+            completed_cases = self._completed_cases()
+            try:
+                logger.status_update(statusUpdate(stepId="2", brief=logger.translated_msg("Risk Assessment"), description=logger.translated_msg(
+                    "Measure model: {model_name}", model_name=model_name
+                ), status="running"))
 
-            async def throttled_evaluate_vulnerability_type(
-                vulnerability_type, attacks
-            ):
-                test_cases = await self._a_evaluate_vulnerability_type(
-                    model_callback,
-                    vulnerability_type,
-                    attacks,
-                    metrics_map,
-                    ignore_errors=ignore_errors,
-                )
-                red_teaming_test_cases.extend(test_cases)
-                pbar.update(len(attacks))
+                async def throttled_evaluate_vulnerability_type(
+                    vulnerability_type, attacks
+                ):
+                    test_cases = await self._a_evaluate_vulnerability_type(
+                        model_callback,
+                        vulnerability_type,
+                        attacks,
+                        metrics_map,
+                        ignore_errors=ignore_errors,
+                        progress_log=progress_log,
+                        completed_cases=completed_cases,
+                    )
+                    red_teaming_test_cases.extend(test_cases)
+                    # 续跑时已完成的用例也算进度：它们不会再被评估，
+                    # 但用户看到的应该是「这次跑完了多少」
+                    pbar.update(len(attacks))
 
-            # Create a list of tasks for evaluating each vulnerability, with throttling
-            logger.tool_used(toolUsed(stepId="2", tool_id=self.asyncRandomId, brief=logger.translated_msg("Measure simulated attacks"), status="todo"))
-            for vulnerability_type, attacks in vulnerability_type_to_attacks_map.items():
-                await throttled_evaluate_vulnerability_type(vulnerability_type, attacks)
-            logger.tool_used(toolUsed(stepId="2", tool_id=self.asyncRandomId, tool_name="Metric measure", brief=logger.translated_msg("Measure simulated attacks done"), status="done"))
+                # Create a list of tasks for evaluating each vulnerability, with throttling
+                logger.tool_used(toolUsed(stepId="2", tool_id=self.asyncRandomId, brief=logger.translated_msg("Measure simulated attacks"), status="todo"))
+                for vulnerability_type, attacks in vulnerability_type_to_attacks_map.items():
+                    await throttled_evaluate_vulnerability_type(vulnerability_type, attacks)
+                logger.tool_used(toolUsed(stepId="2", tool_id=self.asyncRandomId, tool_name="Metric measure", brief=logger.translated_msg("Measure simulated attacks done"), status="done"))
 
-            logger.status_update(statusUpdate(stepId="2", brief=logger.translated_msg("Risk Assessment"), description=logger.translated_msg(
-                "Measure model: {model_name}", model_name=model_name
-            ), status="completed"))
-            pbar.close()
+                logger.status_update(statusUpdate(stepId="2", brief=logger.translated_msg("Risk Assessment"), description=logger.translated_msg(
+                    "Measure model: {model_name}", model_name=model_name
+                ), status="completed"))
+                pbar.close()
+            finally:
+                progress_log.close()
 
             self.risk_assessment = RiskAssessment(
                 overview=construct_risk_assessment_overview(
@@ -504,9 +711,20 @@ Direct translation without separators"""
 
             metric: BaseRedTeamingMetric = metrics_map[vulnerability_type]()
             try:
+                # 连续限流失败熔断：被测模型持续 429 时跳过剩余请求，避免压垮目标与浪费配额。
+                # 计数器维护在目标模型实例上（由其重试逻辑递增/重置），
+                # 通过 model_callback.__self__ 读取，与重试逻辑共享同一份状态
+                consecutive_failures = _get_consecutive_rate_limit_failures(model_callback)
+                if consecutive_failures >= self.rate_limit_circuit_breaker_threshold:
+                    red_teaming_test_case.error = "Skipped: target model rate limit circuit breaker triggered"
+                    red_teaming_test_case.reason = logger.translated_msg("Requests paused because the target model kept hitting rate limits. Please lower concurrency (max_concurrent) or increase the model's QPM quota.")
+                    return red_teaming_test_case
+
                 actual_output = await model_callback(simulated_attack.input)
                 if actual_output == "":
                     raise ValueError("The response is none")
+                # 成功响应，清零模型实例上的连续限流失败计数
+                _reset_consecutive_rate_limit_failures(model_callback)
                 red_teaming_test_case.actual_output = actual_output
             except Exception as e:
                 logger.exception(e)
@@ -550,7 +768,20 @@ Direct translation without separators"""
         simulated_attacks: List[SimulatedAttack],
         metrics_map,
         ignore_errors: bool,
+        progress_log: ProgressLog,
+        completed_cases: Optional[Dict[str, RedTeamingTestCase]] = None,
     ) -> List[RedTeamingTestCase]:
+
+        completed_cases = completed_cases or {}
+        red_teaming_test_cases = []
+        pending_attacks: List[SimulatedAttack] = []
+        for simulated_attack in simulated_attacks:
+            # 续跑时这一条上次已经评过：沿用旧结果，不再调用目标模型
+            completed_case = completed_cases.get(case_key(simulated_attack))
+            if completed_case is not None:
+                red_teaming_test_cases.append(completed_case)
+            else:
+                pending_attacks.append(simulated_attack)
 
         tasks = [
             self._a_attack(
@@ -561,11 +792,10 @@ Direct translation without separators"""
                 metrics_map=metrics_map,
                 ignore_errors=ignore_errors,
             )
-            for simulated_attack in simulated_attacks
+            for simulated_attack in pending_attacks
         ]
 
         total = len(tasks)
-        red_teaming_test_cases = []
 
         for completed, coro in enumerate(asyncio.as_completed(tasks), 1):
             logger.tool_used(toolUsed(stepId="2", tool_id=self.asyncRandomId, brief=logger.translated_msg(
@@ -573,6 +803,7 @@ Direct translation without separators"""
             ), status="doing"))
             result = await coro
             red_teaming_test_cases.append(result)
+            progress_log.record(result)
 
         return red_teaming_test_cases
 
@@ -1121,12 +1352,13 @@ Direct translation without separators"""
             else:
                 status = "Jailbreak"
                 rep_status = True
+            original_input = case.original_input if case.attack_method != "RedTeam" else None
             result = {
-                "status": status, 
-                "modelName": model_name, 
+                "status": status,
+                "modelName": model_name,
                 "vulnerability": case.vulnerability,
                 "attackMethod": case.attack_method,
-                "originalInput": case.original_input if case.attack_method != "RedTeam" else None,
+                "originalInput": original_input,
                 "input": case.input,
                 "output": case.actual_output,
                 "reason": case.reason,

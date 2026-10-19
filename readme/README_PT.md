@@ -34,6 +34,11 @@
     </a>
 </p>
 <p align="center">
+    <a href="https://github.com/openclaw/clawscan" target="_blank">
+       <img src="https://img.shields.io/badge/OpenClaw-Recommended-ff6b6b" alt="OpenClaw Recommended">
+    </a>
+</p>
+<p align="center">
   <a href="https://trendshift.io/repositories/13637" target="_blank"><picture><source media="(prefers-color-scheme: dark)" srcset="https://trendshift.io/api/badge/repositories/13637"><source media="(prefers-color-scheme: light)" srcset="https://trendshift.io/api/badge/repositories/13637"><img src="https://trendshift.io/api/badge/repositories/13637" alt="Tencent%2FAI-Infra-Guard | Trendshift" width="250" height="55"/></picture></a>&nbsp;
   <a href="https://www.blackhat.com/eu-25/arsenal/schedule/index.html#aigai-infra-guard-48381" target="_blank"><img src="../img/blackhat.png" alt="Tencent%2FAI-Infra-Guard | blackhat" width="175" height="55"/></a>&nbsp;
   <a href="https://github.com/deepseek-ai/awesome-deepseek-integration" target="_blank"><img src="../img/awesome-deepseek.png" alt="Tencent%2FAI-Infra-Guard | awesome-deepseek-integration" width="273" height="55"/></a>
@@ -66,11 +71,11 @@ Ajude-nos a melhorar o A.I.G! Por favor, reserve 3-5 minutos para preencher noss
 
 ## 🚀 Novidades
 
+- **2026-09-17** · [v4.6.2](https://github.com/Tencent/AI-Infra-Guard/releases/tag/v4.6.2) — Biblioteca de vulnerabilidades ampliada com 155 novas regras CVE em mais de 40 componentes de IA (LangFlow, n8n, PraisonAI, vLLM, llama-cpp, MLflow e mais); melhorias de precisão no Skill-Scan (menos falsos positivos sem evidência, streaming sem travamentos); novos benchmarks de perda de controle de agentes (FORGE-Bench, RogueHandoff-20).
+- **2026-09-10** · [v4.6.1](https://github.com/Tencent/AI-Infra-Guard/releases/tag/v4.6.1) — API Checker: cobertura de fingerprints de modelos ampliada (Gemini 2.5/3.1, Gemma 2/3/4, GLM-5.3 e GLM-5.3-Flash); confiabilidade do MCP-Scan: sinaliza escaneamentos vazios/incompletos, preserva as descobertas de segurança durante a compactação de contexto, expõe erros de conexão subjacentes; correção de nomes de produtos CVE mal rotulados.
+- **2026-08-26** · [v4.6.0](https://github.com/Tencent/AI-Infra-Guard/releases/tag/v4.6.0) — Detecção de envenenamento de API LLM (auditoria black-box multiprova para substituição de modelo e riscos de backdoor); Agent-Scan v5.0.0 refatoração do motor de mutação; biblioteca de vuln expandida para 146 componentes AI e 2000+ regras CVE; correções de estabilidade e compatibilidade de escaneamento MCP/Skill.
 - **2026-08-17** · [v4.5.2](https://github.com/Tencent/AI-Infra-Guard/releases/tag/v4.5.2) — Skill-Scan: detecção de bypass .pyc bytecode + defesa contra charset smuggling; MCP-Scan: prevenção de RCE via whitelist de ferramentas em modo dinâmico; novo projeto de pesquisa SkillJack; biblioteca de vulnerabilidades expandida para 2000+ regras CVE.
 - **2026-07-30** · [v4.5.1](https://github.com/Tencent/AI-Infra-Guard/releases/tag/v4.5.1) — Jailbreak Evaluation: 4 ataques de jailbreak multi-turno (Many-Shot, PAIR, GOAT, ActorAttack); Agent-Scan: 5 novas skills OWASP + detecção de exfiltração web (10 skills no total); MCP-Scan: 4 novas regras de segurança
-- **2026-07-27** · [v4.5.0](https://github.com/Tencent/AI-Infra-Guard/releases/tag/v4.5.0) — Mercado de skills de segurança IA lançado (3 skills oficiais); frontend totalmente open source; motor de scan Skill aprimorado (9 categorias de risco, SkillTrustBench topo 0.9848); scan Skill/MCP/Agent como CLI independente; biblioteca de vulnerabilidades expandida para 130 componentes, 1888 regras
-- **2026-06-25** · [v4.1.15](https://github.com/Tencent/AI-Infra-Guard/releases/tag/v4.1.15) — MCP Scan: 3 novas regras de detecção de ameaças (envenenamento de ferramentas, exfiltração de credenciais, injeção de comandos); 6 novas regras CVE para llama.cpp; `model.token` agora opcional com fallback para o modelo padrão do sistema.
-- **2026-06-18** · [v4.1.14](https://github.com/Tencent/AI-Infra-Guard/releases/tag/v4.1.14) — Prompt Security: 9 novos operadores de ataque single-turn; nova skill `aig-agent-redteam` para avaliação red-team abrangente de Agentes.
 
 👉 [Versões anteriores](../CHANGELOG.md) · 🛒 [Mercado de Skills de Segurança IA](https://matrix.tencent.com/skill-market/) · 🔍 [skill-scan CLI](https://github.com/Tencent/AI-Infra-Guard/tree/main/skill-scan) · 🔍 [mcp-scan CLI](https://github.com/Tencent/AI-Infra-Guard/tree/main/mcp-scan) · 🔍 [agent-scan CLI](https://github.com/Tencent/AI-Infra-Guard/tree/main/agent-scan) · 📊 [SkillTrustBench](https://matrix.tencent.com/skilltrustbench/)
 
@@ -87,7 +92,7 @@ Ajude-nos a melhorar o A.I.G! Por favor, reserve 3-5 minutos para preencher noss
 - [🙏 Agradecimentos](#-agradecimentos)
 - [💬 Junte-se à Comunidade](#-junte-se-à-comunidade)
 - [📖 Citação](#-citação)
-- [📚 Publicações](#-publicações)
+- [📚 Pesquisa & Papers](#-pesquisa--papers)
 - [⚖️ Licença e Atribuição](#️-licença-e-atribuição)
 <br><br>
 ## 🚀 Início Rápido
@@ -551,9 +556,19 @@ Se você usar o A.I.G em sua pesquisa, por favor cite:
 ```
 <br>
 
-## 📚 Publicações
+## 📚 Pesquisa & Papers
 
-> 📂 **[Research Projects](https://github.com/Tencent/AI-Infra-Guard/tree/main/Research)** — Código aberto, conjuntos de dados e artefatos do nosso trabalho de pesquisa.
+**Research:**
+
+1. **"RogueHandoff-20: Measuring Susceptibility to Unsafe Agent Trajectories"** — Um benchmark baseado em Docker que mede se um agente adota uma trajetória insegura fornecida como estado anterior, testando a suscetibilidade após exposição à estratégia insegura de outro agente. [[code]](../Research/roguehandoff20)
+
+2. **"FORGE-Bench: A Deterministic Benchmark for Loss of Control in Autonomous Agents"** — Um benchmark determinístico baseado em oráculos que estuda como agentes autônomos perdem o controle ao realizar tarefas legítimas, avaliando pressão de objetivo, degradação de restrições e oportunidade insegura em 16 domínios e 1.800 trajetórias. [[arXiv]](https://arxiv.org/abs/2609.11024) [[code]](../Research/forge_bench)
+
+3. **"DeepSeek Harness Indirect Prompt-Injection Assessment"** — Avaliação de segurança autorizada do DeepSeek Harness contra injeção indireta de prompts em 14.560 execuções de agentes. [[code]](../Research/deepseek-harness-security-assessment)
+
+4. **"SkillJack: Persistent Skill Backdoors in Self-Evolving Agents"** — Demonstra como trajetórias envenenadas podem injetar backdoors persistentes em sistemas de habilidades de agentes auto-evolutivos. [[code]](../Research/SkillJack)
+
+**Papers:**
 
 1. **"Securing the AI Agent: A Unified Framework for Multi-Layer Agent Red Teaming"** — Um framework abrangente para proteger sistemas de agentes de IA por meio de red teaming multicamada cobrindo infraestrutura, cadeia de suprimentos, interação em tempo de execução e superfícies de implantação. [[arXiv]](https://arxiv.org/pdf/2606.31227) [[pdf]](../Securing_the_AI_Agent.pdf)
 

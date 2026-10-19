@@ -1,4 +1,6 @@
+import base64
 import json
+import math
 import tempfile
 import threading
 import time
@@ -11,6 +13,104 @@ from services.api_checker.algorithms import common, pamela, relay_audit, signatu
 
 
 class BaselineTests(unittest.TestCase):
+    def test_claude5_opaque_signature_passes_structural_check(self):
+        opaque = base64.b64encode(bytes(range(256)) * 2).decode()
+
+        info = signature.parse_signature(opaque)
+        result = signature._check_signature_structure({"signature": opaque})
+
+        self.assertIsNone(info.model)
+        self.assertEqual(512, info.total_bytes)
+        self.assertGreaterEqual(info.ciphertext_entropy, 7.5)
+        self.assertTrue(result.passed)
+        self.assertIn("opaque", result.detail)
+
+    def test_short_high_entropy_ciphertext_uses_sample_size_ceiling(self):
+        info = signature.SignatureInfo(
+            total_bytes=294,
+            model="claude-opus-5",
+            ciphertext_len=30,
+            ciphertext_entropy=math.log2(30),
+        )
+        with patch.object(signature, "parse_signature", return_value=info):
+            result = signature._check_signature_structure({
+                "signature": "opaque",
+            })
+
+        self.assertTrue(result.passed)
+        self.assertIn("100.0%", result.detail)
+
+    def test_signature_harvest_preserves_complete_thinking_blocks(self):
+        blocks = [
+            {"type": "thinking", "thinking": "work", "signature": "sig-a"},
+            {"type": "redacted_thinking", "data": "sig-b"},
+            {"type": "text", "text": "answer"},
+        ]
+        with patch.object(
+            signature,
+            "http_post_json",
+            return_value=(200, {
+                "content": blocks,
+                "model": "claude-opus-5",
+                "usage": {},
+            }),
+        ):
+            result = signature.harvest_signature(
+                "https://api.example.test",
+                "secret",
+                "claude-opus-5",
+                user_message="original prompt",
+            )
+
+        self.assertEqual("sig-b", result["signature"])
+        self.assertEqual(blocks[:2], result["thinking_blocks"])
+        self.assertEqual(blocks, result["assistant_content"])
+        self.assertEqual("original prompt", result["user_message"])
+
+    def test_signature_replay_returns_original_thinking_block_unchanged(self):
+        thinking_block = {
+            "type": "thinking",
+            "thinking": "original work",
+            "signature": "opaque-signature",
+        }
+        original_content = [
+            thinking_block,
+            {"type": "text", "text": "original answer"},
+        ]
+        with patch.object(
+            signature,
+            "http_post_json",
+            return_value=(200, {
+                "content": [{"type": "text", "text": "OK"}],
+            }),
+        ) as request:
+            result = signature.replay_signature(
+                "https://api.example.test",
+                "secret",
+                "claude-opus-5",
+                "opaque-signature",
+                preceding_user="original prompt",
+                thinking_blocks=[thinking_block],
+                assistant_content=original_content,
+            )
+
+        body = request.call_args.args[2]
+        self.assertEqual("original prompt", body["messages"][0]["content"])
+        self.assertEqual(original_content, body["messages"][1]["content"])
+        self.assertEqual("OK", result["recovered"])
+
+    def test_signed_thinking_block_satisfies_thinking_usage_check(self):
+        result = signature._check_thinking_tokens({
+            "thinking_tokens": 0,
+            "thinking_blocks": [{
+                "type": "redacted_thinking",
+                "data": "opaque-signature",
+            }],
+        })
+
+        self.assertTrue(result.passed)
+        self.assertIn("signed blocks=1", result.detail)
+
     def test_all_bundled_baseline_ids_map_case_insensitively(self):
         baselines = common.load_baselines()
         for baseline in baselines:
@@ -104,8 +204,24 @@ class BaselineTests(unittest.TestCase):
 
     def test_bundled_baselines_are_complete(self):
         baselines = common.load_baselines()
-        self.assertEqual(29, len(baselines))
-        self.assertEqual(29, len({item["model"].lower() for item in baselines}))
+        self.assertEqual(42, len(baselines))
+        model_ids = {item["model"].lower() for item in baselines}
+        self.assertEqual(42, len(model_ids))
+        self.assertTrue({
+            "google/gemini-2.5-flash",
+            "google/gemini-2.5-flash-lite",
+            "google/gemini-3.1-flash-lite",
+            "google/gemma-2-27b-it",
+            "google/gemma-3-4b-it",
+            "google/gemma-3-12b-it",
+            "google/gemma-3-27b-it",
+            "google/gemma-3n-e4b-it",
+            "google/gemma-4-26b-a4b-it",
+            "google/gemma-4-31b-it",
+            "anthropic/claude-opus-5",
+            "z-ai/glm-5.3",
+            "glm-5.3-flash",
+        }.issubset(model_ids))
         for baseline in baselines:
             self.assertEqual(common.NUMBER_RANGE, len(baseline["counts"]))
             self.assertEqual(common.NUMBER_RANGE, len(baseline["distribution"]))
@@ -178,6 +294,48 @@ class BaselineTests(unittest.TestCase):
         self.assertEqual([], results)
         self.assertEqual(0, errors)
         call.assert_not_called()
+
+    def test_collect_samples_refills_failed_requests(self):
+        responses = [None] + ["7"] * 200
+        progress = []
+        with patch.object(
+            common,
+            "_call_api_for_number",
+            side_effect=responses,
+        ) as call:
+            results, errors = common.collect_samples(
+                "openai",
+                "https://example.test/v1",
+                "secret",
+                "model-a",
+                iterations=200,
+                concurrency=1,
+                on_progress=lambda *values: progress.append(values),
+            )
+
+        self.assertEqual(200, len(results))
+        self.assertEqual(1, errors)
+        self.assertEqual(201, call.call_count)
+        self.assertEqual((201, 201, 200, 1), progress[-1])
+
+    def test_collect_samples_stops_after_retry_budget_is_exhausted(self):
+        with patch.object(
+            common,
+            "_call_api_for_number",
+            return_value=None,
+        ) as call:
+            results, errors = common.collect_samples(
+                "openai",
+                "https://example.test/v1",
+                "secret",
+                "model-a",
+                iterations=200,
+                concurrency=5,
+            )
+
+        self.assertEqual([], results)
+        self.assertEqual(400, errors)
+        self.assertEqual(400, call.call_count)
 
     def test_responses_fingerprint_omits_optional_temperature(self):
         response = {
@@ -433,6 +591,82 @@ class RelayAuditTests(unittest.TestCase):
             "claude-sonnet-5",
             result.data["resolved_model"],
         )
+
+    def test_anthropic_models_probe_uses_anthropic_protocol(self):
+        with patch.object(
+            relay_audit,
+            "_http_json",
+            return_value=(200, {
+                "data": [{"id": "claude-opus-5"}],
+            }, 10),
+        ) as request:
+            result = relay_audit.probe_models(
+                "https://api.example.test/v1",
+                "secret",
+                "claude-opus-5",
+                api_type="anthropic",
+            )
+
+        self.assertTrue(result.data["target_model_present"])
+        self.assertEqual("anthropic", request.call_args.kwargs["api_type"])
+
+    def test_anthropic_models_probe_falls_back_to_bearer_auth(self):
+        with patch.object(
+            relay_audit,
+            "_http_json",
+            side_effect=[
+                (401, {"error": "unauthorized"}, 10),
+                (200, {"data": [{"id": "anthropic/claude-opus-5"}]}, 20),
+            ],
+        ) as request:
+            result = relay_audit.probe_models(
+                "https://openrouter.example/v1",
+                "secret",
+                "anthropic/claude-opus-5",
+                api_type="anthropic",
+            )
+
+        self.assertTrue(result.ok)
+        self.assertTrue(result.data["target_model_present"])
+        self.assertEqual(30, result.latency_ms)
+        self.assertEqual("anthropic", request.call_args_list[0].kwargs["api_type"])
+        self.assertEqual("openai", request.call_args_list[1].kwargs["api_type"])
+
+    def test_http_json_uses_anthropic_headers(self):
+        class Response:
+            status = 200
+
+            def read(self):
+                return b"{}"
+
+            def close(self):
+                pass
+
+        requests = []
+
+        def open_request(request, timeout):
+            requests.append(request)
+            return Response()
+
+        with patch.object(
+            relay_audit._NO_REDIRECT_OPENER,
+            "open",
+            side_effect=open_request,
+        ):
+            relay_audit._http_json(
+                "https://api.example.test/v1/models",
+                "secret",
+                method="GET",
+                api_type="anthropic",
+            )
+
+        headers = {
+            key.lower(): value
+            for key, value in requests[0].header_items()
+        }
+        self.assertEqual("secret", headers["x-api-key"])
+        self.assertEqual("2023-06-01", headers["anthropic-version"])
+        self.assertNotIn("authorization", headers)
 
     def test_stream_model_comparison_is_case_insensitive(self):
         findings = relay_audit.build_findings(
@@ -695,6 +929,73 @@ class RelayAuditTests(unittest.TestCase):
             self.assertNotIn("temperature", responses_body)
             self.assertEqual(messages, responses_body["input"])
             self.assertNotIn("messages", responses_body)
+
+    def test_chat_supports_native_anthropic_messages(self):
+        messages = [{"role": "user", "content": "hello"}]
+        with patch.object(
+            relay_audit,
+            "_http_json",
+            return_value=(200, {
+                "content": [{"type": "text", "text": "hello"}],
+                "stop_reason": "end_turn",
+            }, 1),
+        ) as request:
+            status, payload, _, resolved_model = relay_audit._chat(
+                "https://api.example.test/v1",
+                "secret",
+                "claude-opus-5",
+                messages,
+                api_type="anthropic",
+            )
+
+        url, _, body = request.call_args.args
+        self.assertEqual("https://api.example.test/v1/messages", url)
+        self.assertEqual(messages, body["messages"])
+        self.assertEqual("anthropic", request.call_args.kwargs["api_type"])
+        self.assertEqual(200, status)
+        self.assertEqual("hello", relay_audit._extract_text(payload))
+        self.assertEqual("end_turn", relay_audit._finish_reason(payload))
+        self.assertEqual("claude-opus-5", resolved_model)
+
+    def test_anthropic_stream_accepts_message_stop(self):
+        chunks = [
+            {
+                "type": "message_start",
+                "message": {
+                    "model": "claude-opus-5",
+                    "usage": {"input_tokens": 10},
+                },
+            },
+            {
+                "type": "message_delta",
+                "usage": {"output_tokens": 5},
+            },
+            {"type": "message_stop"},
+        ]
+        with patch.object(
+            relay_audit,
+            "_http_stream",
+            return_value=(chunks, False, [], 20),
+        ) as request:
+            result = relay_audit.probe_stream(
+                "https://api.example.test/v1",
+                "secret",
+                "claude-opus-5",
+                api_type="anthropic",
+            )
+
+        self.assertTrue(result.ok)
+        self.assertTrue(result.data["anthropic_completed"])
+        self.assertEqual(["claude-opus-5"], result.data["stream_models"])
+        self.assertEqual(
+            {"input_tokens": 10, "output_tokens": 5},
+            result.data["usage"],
+        )
+        self.assertEqual(
+            "https://api.example.test/v1/messages",
+            request.call_args.args[0],
+        )
+        self.assertEqual("anthropic", request.call_args.kwargs["api_type"])
 
     def test_chat_retries_unprefixed_model_after_model_error(self):
         with patch.object(

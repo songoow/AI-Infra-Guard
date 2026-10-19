@@ -438,6 +438,8 @@ def anthropic_bases(base_url: str) -> tuple[str, str]:
     - 算法B signature 客户端：base + /v1/messages → base 需不含 /v1
     """
     b = base_url.rstrip("/")
+    if urlparse(b).path.endswith("/messages"):
+        b = b[:-len("/messages")]
     if b.endswith("/v1"):
         return b, b[:-len("/v1")]
     return b + "/v1", b
@@ -820,6 +822,9 @@ def _run_audit(req: DetectRequest, base_url: str, cancel_event=None,
         cancel_event=cancel_event,
         api_type=api_type,
         on_request_progress=progress,
+        models_api_type=(
+            "anthropic" if is_claude_model(req.model) else None
+        ),
     )
     _raise_if_cancelled(cancel_event)
     test_info = _audit_test_info(result["probe_results"])
@@ -1136,8 +1141,12 @@ def _audit_score(audit: dict) -> float:
         0.0,
         min(100.0, 100.0 - float(risk_score)),
     )
-    # 防御内部状态不一致：只要审计结论已是风险，组件分就不能仍为满分。
-    return round(min(score, 50.0) if _audit_has_risk(audit) else score, 1)
+    # _risk_score 已包含各审计项的加权扣分。仅在上游状态不一致（已经
+    # 判定有风险但没有给出任何扣分）时使用防御性兜底，避免一个 LOW
+    # 风险项也被无条件压到 50 分。
+    if _audit_has_risk(audit) and score == 100.0:
+        score = 50.0
+    return round(score, 1)
 
 
 def _signature_score(signature: dict) -> float:
@@ -1717,13 +1726,17 @@ def _run_detect(
                     summary_request_state["error"] += 1
                 combined_progress()
 
+        audit_base = normalize_openai_base(req.base_url)
+        if claude:
+            audit_base, _ = anthropic_bases(req.base_url)
         try:
+            audit_api_type = "anthropic" if claude else openai_type
             parts["audit"] = _run_audit(
                 req,
-                normalize_openai_base(req.base_url),
+                audit_base,
                 cancel_event,
                 audit_progress,
-                openai_type,
+                audit_api_type,
             )
             resolved_model = parts["audit"].get("_resolved_model")
             if resolved_model and resolved_model != req.model:
@@ -1797,9 +1810,9 @@ def _run_detect(
     try:
         parts["audit"] = _run_audit(
             req,
-            normalize_openai_base(req.base_url),
+            fp_base,
             cancel_event,
-            api_type=openai_type,
+            api_type="anthropic" if claude else openai_type,
         )
         resolved_model = parts["audit"].get("_resolved_model")
         if resolved_model and resolved_model != req.model:

@@ -140,8 +140,10 @@ During the scan, the three-stage pipeline (Info Collection → Code Audit → Vu
 CLI mode outputs **SARIF 2.1.0** JSON by default, containing:
 
 - **rules**: Statically declares the full MCP01–MCP10 + 3 supplemental classification rules (Name Confusion, Rug Pull, Tool Shadowing), always output even if no vulnerabilities are found
-- **results**: Each vulnerability maps to a rule ID, including `level` (error/warning/note), `locations` (file + line number), `partialFingerprints` (dedup hash), and `fixes` (fix suggestions)
+- **results**: Each vulnerability maps to a rule ID, including `level` (error/warning/note), `locations` (file + line number), and `partialFingerprints` (dedup hash). Remediation guidance is included in `message.text` and preserved separately in `properties.suggestion`; prose recommendations are not emitted as machine-applicable SARIF `fixes`.
 - **properties**: Security score, primary language, LLM used, scan duration
+
+> **Migration note**: earlier releases carried the remediation text in `results[].fixes[0].description.text`. That field is no longer emitted — read `results[].properties.suggestion` instead (the same text is also appended to `message.text`).
 
 SARIF files can be uploaded directly to GitHub Code Scanning:
 
@@ -254,7 +256,7 @@ mcp-scan/
 │   ├── main.py            # Package entry (CLI)
 │   └── __main__.py        # python -m mcp_scan entry
 ├── main.py                 # Thin shell for AIG Go backend compatibility (uv run main.py)
-├── pyproject.toml          # Project config (version 0.2.0, Python >=3.9)
+├── pyproject.toml          # Project config (version 0.2.0, Python >=3.10)
 ├── py.typed                # PEP 561 type marker
 ├── requirements.txt        # Dependencies
 ├── env.example            # Environment variable template
@@ -315,7 +317,7 @@ If a `SKILL.md` file exists in the project root, the tool automatically triggers
 
 ## 🤝 Development
 
-It is recommended to use `uv` for local development environment management (supports Python >=3.9).
+It is recommended to use `uv` for local development environment management (supports Python >=3.10).
 To initialize the dev environment:
 
 ```bash

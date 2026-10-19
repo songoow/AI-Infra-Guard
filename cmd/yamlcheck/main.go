@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/Tencent/AI-Infra-Guard/common/fingerprints/parser"
@@ -62,6 +63,14 @@ func main() {
 		}
 	}
 
+	if collisions := findCaseInsensitivePathCollisions(yamlFiles); len(collisions) > 0 {
+		fmt.Fprintln(os.Stderr, "❌ [case-insensitive path collision] conflicting YAML paths found:")
+		for _, collision := range collisions {
+			fmt.Fprintf(os.Stderr, "  - %s\n", strings.Join(collision, " | "))
+		}
+		os.Exit(1)
+	}
+
 	hasError := false
 	checkedCount := 0
 	passCount := 0
@@ -69,7 +78,7 @@ func main() {
 
 	fmt.Println()
 	fmt.Println("╔══════════════════════════════════════════════╗")
-	fmt.Println("║         AIG YAML Validation Report          ║")
+	fmt.Println("║          AIG YAML Validation Report          ║")
 	fmt.Println("╚══════════════════════════════════════════════╝")
 	fmt.Println()
 
@@ -90,9 +99,13 @@ func main() {
 
 		switch category {
 		case "fingerprint":
-			_, err = parser.InitFingerPrintFromData(data)
+			fp, err := parser.InitFingerPrintFromData(data)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "  ❌  FAIL  [fingerprint]  %s\n      └─ %v\n", file, err)
+				hasError = true
+				failCount++
+			} else if strings.TrimSpace(fp.Info.Name) == "" {
+				fmt.Fprintf(os.Stderr, "  ❌  FAIL  [fingerprint]  %s\n      └─ missing required 'name' field\n", file)
 				hasError = true
 				failCount++
 			} else {
@@ -100,9 +113,17 @@ func main() {
 				passCount++
 			}
 		case "vuln":
-			_, err = vulstruct.ReadVersionVul(data)
+			vul, err := vulstruct.ReadVersionVul(data)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "  ❌  FAIL  [vuln rule]   %s\n      └─ %v\n", file, err)
+				hasError = true
+				failCount++
+			} else if strings.TrimSpace(vul.Info.FingerPrintName) == "" {
+				fmt.Fprintf(os.Stderr, "  ❌  FAIL  [vuln rule]   %s\n      └─ missing required 'name' field\n", file)
+				hasError = true
+				failCount++
+			} else if !isValidSeverity(vul.Info.Severity) {
+				fmt.Fprintf(os.Stderr, "  ❌  FAIL  [vuln rule]   %s\n      └─ invalid or missing severity level '%s'\n", file, vul.Info.Severity)
 				hasError = true
 				failCount++
 			} else {
@@ -133,6 +154,56 @@ func main() {
 
 	fmt.Println()
 	fmt.Println("✅ All YAML files passed validation!")
+}
+
+// isValidSeverity verifies that severity matches standard vulnerability levels.
+// Accepts both English (low/medium/high/critical) and Chinese (低/中/高/严重/危急)
+// severity labels used across the zh/en rule libraries, plus UNKNOWN/"" for
+// rules where no CVSS score is available (e.g. supply-chain advisories).
+func isValidSeverity(severity string) bool {
+	switch strings.ToLower(strings.TrimSpace(severity)) {
+	case "info", "low", "medium", "high", "critical",
+		"信息", "低", "中", "中等", "高", "中危", "高危", "严重", "危急",
+		"unknown", "":
+		return true
+	default:
+		return false
+	}
+}
+
+// findCaseInsensitivePathCollisions returns distinct paths that become equal
+// after normalizing separators and folding case. Duplicate occurrences of the
+// exact same normalized path are ignored.
+func findCaseInsensitivePathCollisions(paths []string) [][]string {
+	grouped := make(map[string]map[string]struct{})
+	for _, path := range paths {
+		normalized := filepath.ToSlash(filepath.Clean(path))
+		folded := strings.ToLower(normalized)
+		if grouped[folded] == nil {
+			grouped[folded] = make(map[string]struct{})
+		}
+		grouped[folded][normalized] = struct{}{}
+	}
+
+	var foldedPaths []string
+	for folded, originals := range grouped {
+		if len(originals) > 1 {
+			foldedPaths = append(foldedPaths, folded)
+		}
+	}
+	sort.Strings(foldedPaths)
+
+	var collisions [][]string
+	for _, folded := range foldedPaths {
+		originals := make([]string, 0, len(grouped[folded]))
+		for original := range grouped[folded] {
+			originals = append(originals, original)
+		}
+		sort.Strings(originals)
+		collisions = append(collisions, originals)
+	}
+
+	return collisions
 }
 
 // walkYAMLFiles recursively walks a directory and returns all .yaml/.yml file paths.

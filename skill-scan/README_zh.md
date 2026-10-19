@@ -6,7 +6,7 @@
 
 `aig-skill-scan` 是 [Tencent AI-Infra-Guard](https://github.com/Tencent/AI-Infra-Guard) 的子项目，专门用于对 AI Agent Skill 项目（如 OpenClaw Skill 等）进行静态安全审计，由 LLM 驱动。
 
-- **默认（单阶段）模式**：仅执行 **Code Audit**，直接产出漏洞结果，速度更快，适合独立 CLI 使用。
+- **默认模式**：先执行 **Code Audit**，仅当首轮结论为 `suspicious` 时追加一次聚焦的 **Verdict Review**；明确的 `normal` 和 `malicious` 结论仍走快速路径。
 - **`--aig-mode`（三阶段）模式**：**Info Collection → Code Audit → Vulnerability Review** 完整流水线，用于 AI-Infra-Guard 平台前端的分步展示，无需手动开启。
 
 漏洞分类对齐 [SkillTrustBench](https://github.com/Tencent/AI-Infra-Guard) T01–T09 分类法，判定标准：`malicious`（明确攻击意图）/ `suspicious`（有漏洞但无明确攻击意图）/ `normal`（良性）。
@@ -74,16 +74,16 @@ aig-skill-scan --help
 ```json
 {
   "version": "2.1.0",
-  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/Schemata/sarif-schema-2.1.0.json",
+  "$schema": "https://docs.oasis-open.org/sarif/sarif/v2.1.0/os/schemas/sarif-schema-2.1.0.json",
   "runs": [{
-    "tool": {"driver": {"name": "aig-skill-scan", "version": "0.2.1", "rules": [...]}},
+    "tool": {"driver": {"name": "aig-skill-scan", "version": "0.2.2", "rules": [...]}},
     "results": [{
       "ruleId": "T04",
       "level": "error",
-      "message": {"text": "..."},
+      "message": {"text": "漏洞摘要\n\n修复建议。"},
       "locations": [{"physicalLocation": {"artifactLocation": {"uri": "scripts/setup.sh"}, "region": {"startLine": 12, "endLine": 18}}}],
       "partialFingerprints": {"primaryLocationLineHash": "..."},
-      "fixes": [{"description": {"text": "..."}}]
+      "properties": {"suggestion": "修复建议。"}
     }]
   }]
 }
@@ -92,6 +92,8 @@ aig-skill-scan --help
 - `ruleId` 来自漏洞的 `risk_type`（SkillTrustBench T01–T09 分类编号）
 - `level` 由严重度（Critical/High/Medium/...）归一化映射为 SARIF 的 `error`/`warning`/`note`
 - `locations` 依赖 LLM 输出的可选结构化字段（文件路径 + 行号），无法定位时 `uri` 兜底为 `"."`
+- 修复建议在 `message.text` 中展示，并保存在 `properties.suggestion`。SARIF `fixes` 要求具体的文件修改，因此文字建议不会被输出为自动修复。
+- **迁移说明**：旧版本将该文本放在 `results[].fixes[0].description.text`，该字段不再输出，请改读 `results[].properties.suggestion`
 
 `--aig-mode` 模式下 `-o` 保存的仍是原有的内部 JSON 结构（供平台内部消费），不受影响。
 
@@ -116,12 +118,12 @@ async def run():
               base_url="https://openrouter.ai/api/v1",
               context_window=128_000)
 
-    # 单阶段（默认），aig_mode=False
+    # 默认流水线：仅对 suspicious 结论追加复核，aig_mode=False
     agent = Agent(llm=llm, debug=False, language="zh", aig_mode=False)
     result = await agent.scan("/path/to/your/skill", "", "zh")
 
     # 转为 SARIF 2.1.0 格式
-    sarif_doc = to_sarif(result, tool_version="0.2.1", language="zh")
+    sarif_doc = to_sarif(result, tool_version="0.2.2", language="zh")
     print(json.dumps(sarif_doc, ensure_ascii=False, indent=2))
 
 asyncio.run(run())
@@ -144,6 +146,7 @@ asyncio.run(run())
 | `LLM_MODEL` / `OPENAI_MODEL` | 默认模型 | `deepseek-v4-flash` |
 | `LLM_BASE_URL` / `OPENAI_BASE_URL` | 默认 Base URL | `https://openrouter.ai/api/v1` |
 | `DEFAULT_MODEL_CONTEXT_WINDOW` | 主模型上下文窗口 | `128000` |
+| `REASONING_EFFORT` | 可选推理强度（例如 `high`）；支持的值取决于模型和服务提供商。未设置或为空白时不发送该 API 参数。 | 未设置 |
 | `LOG_LEVEL` | 日志级别 | `INFO` |
 
 ---
@@ -152,7 +155,7 @@ asyncio.run(run())
 
 ```
 skill_scan/
-├── agent/              # Agent 扫描流水线（默认单阶段，--aig-mode 时三阶段）
+├── agent/              # Agent 扫描流水线（默认按需复核 suspicious，--aig-mode 时三阶段）
 │   ├── agent.py        # Agent 主类，扫描入口 + 阶段调度
 │   └── base_agent.py   # LLM 循环 + 工具调用基类
 ├── tools/              # XML-schema 工具注册表
@@ -168,7 +171,7 @@ skill_scan/
 │   ├── sarif_formatter.py # 内部结果 → SARIF 2.1.0 转换（非 --aig-mode 时使用）
 │   ├── project_analyzer.py # 语言识别 + calc_skill_score
 │   ├── text_decoder.py # 有界文本解码，带字符集走私检测
-│   └── pre_scan.py     # 预扫描：生成项目概要 + 编码异常检测
+│   └── pre_scan.py     # 预扫描：生成项目概要 + 编码异常检测 + 字节码（.pyc）及依赖/缓存/构建目录引用标记
 ├── prompt/             # 打包的 prompt 模板
 │   ├── system_prompt.md
 │   ├── compact.md  next_prompt.md  format_report.md

@@ -37,6 +37,11 @@ type ModelInfo struct {
 	BaseURL            string `json:"base_url" binding:"required"`
 	Limit              int    `json:"limit"`
 	Note               string `json:"note"`
+
+	// ExtraHeaders 随每个模型请求发送，例如 OpenRouter 的 X-Title
+	ExtraHeaders map[string]string `json:"extra_headers,omitempty"`
+	// ExtraBody 合并进请求体，键支持点号路径（如 provider.order）
+	ExtraBody map[string]any `json:"extra_body,omitempty"`
 }
 
 // CreateModelRequest 创建模型请求
@@ -53,6 +58,11 @@ type UpdateModelInfo struct {
 	BaseURL            string `json:"base_url"`
 	Limit              int    `json:"limit"`
 	Note               string `json:"note"`
+
+	// ExtraHeaders 随每个模型请求发送，例如 OpenRouter 的 X-Title
+	ExtraHeaders map[string]string `json:"extra_headers,omitempty"`
+	// ExtraBody 合并进请求体，键支持点号路径（如 provider.order）
+	ExtraBody map[string]any `json:"extra_body,omitempty"`
 }
 
 // UpdateModelRequest 更新模型请求
@@ -79,6 +89,20 @@ func maskToken(token string) string {
 		return ""
 	}
 	return maskedToken
+}
+
+// maskValues 保留键、统一掩码值。
+// extra_headers / extra_body 可能承载 Authorization 之类的密钥，
+// 前端只需要知道配置了哪些键，不需要看到内容本身。
+func maskValues[V any](values map[string]V) map[string]any {
+	if values == nil {
+		return nil
+	}
+	masked := make(map[string]any, len(values))
+	for key := range values {
+		masked[key] = maskedToken
+	}
+	return masked
 }
 
 // NewModelManager 创建新的ModelManager实例
@@ -122,6 +146,9 @@ func HandleGetModelList(c *gin.Context, mm *ModelManager) {
 				"base_url": model.BaseURL,
 				"note":     model.Note,
 				"limit":    model.Limit,
+				// 同样只暴露键名，避免把密钥类请求头回传给前端
+				"extra_headers": maskValues(model.ExtraHeaders),
+				"extra_body":    maskValues(model.ExtraBody),
 			},
 		}
 		if model.Default != nil {
@@ -194,6 +221,9 @@ func HandleGetModelDetail(c *gin.Context, mm *ModelManager) {
 			"base_url": model.BaseURL,
 			"note":     model.Note,
 			"limit":    model.Limit,
+			// 同样只暴露键名，避免把密钥类请求头回传给前端
+			"extra_headers": maskValues(model.ExtraHeaders),
+			"extra_body":    maskValues(model.ExtraBody),
 		},
 		"default": model.Default,
 	}
@@ -294,6 +324,9 @@ func HandleCreateModel(c *gin.Context, mm *ModelManager) {
 		Key:                req.Model.Token,
 		Model:              req.Model.Model,
 		BaseUrl:            req.Model.BaseURL,
+
+		ExtraHeaders: req.Model.ExtraHeaders,
+		ExtraBody:    req.Model.ExtraBody,
 	}
 	if !strings.HasSuffix(ai.BaseUrl, "/") {
 		ai.BaseUrl += "/"
@@ -318,6 +351,9 @@ func HandleCreateModel(c *gin.Context, mm *ModelManager) {
 		BaseURL:            req.Model.BaseURL,
 		Note:               req.Model.Note,
 		Limit:              req.Model.Limit,
+
+		ExtraHeaders: req.Model.ExtraHeaders,
+		ExtraBody:    req.Model.ExtraBody,
 	}
 
 	err = mm.modelStore.CreateModel(model)
@@ -406,6 +442,81 @@ func HandleUpdateModel(c *gin.Context, mm *ModelManager) {
 	}
 	if req.Model.BaseURL != "" {
 		updates["base_url"] = req.Model.BaseURL
+	}
+	if req.Model.ExtraHeaders != nil {
+		// 掩码串表示“沿用原值”：直接写库会把 ******** 变成真实请求头，
+		// 所以先把被掩码的键从库中恢复出来。
+		hasMasked := false
+		for _, value := range req.Model.ExtraHeaders {
+			if value == maskedToken {
+				hasMasked = true
+				break
+			}
+		}
+
+		var storedHeaders map[string]string
+		if hasMasked {
+			stored, err := mm.modelStore.GetModel(modelID)
+			if err != nil {
+				log.Errorf("读取模型失败: trace_id=%s, modelID=%s, username=%s, error=%v", traceID, modelID, username, err)
+				c.JSON(http.StatusOK, gin.H{
+					"status":  1,
+					"message": "读取模型失败: " + err.Error(),
+					"data":    nil,
+				})
+				return
+			}
+			storedHeaders = stored.ExtraHeaders
+		}
+
+		headers := make(map[string]string, len(req.Model.ExtraHeaders))
+		for key, value := range req.Model.ExtraHeaders {
+			if value == maskedToken {
+				if existing, ok := storedHeaders[key]; ok {
+					headers[key] = existing
+				}
+				continue
+			}
+			headers[key] = value
+		}
+		updates["extra_headers"] = headers
+	}
+	if req.Model.ExtraBody != nil {
+		// 与 extra_headers 同理：extra_body 的取值同样对外掩码。
+		hasMasked := false
+		for _, value := range req.Model.ExtraBody {
+			if value == maskedToken {
+				hasMasked = true
+				break
+			}
+		}
+
+		var storedBody map[string]any
+		if hasMasked {
+			stored, err := mm.modelStore.GetModel(modelID)
+			if err != nil {
+				log.Errorf("读取模型失败: trace_id=%s, modelID=%s, username=%s, error=%v", traceID, modelID, username, err)
+				c.JSON(http.StatusOK, gin.H{
+					"status":  1,
+					"message": "读取模型失败: " + err.Error(),
+					"data":    nil,
+				})
+				return
+			}
+			storedBody = stored.ExtraBody
+		}
+
+		body := make(map[string]any, len(req.Model.ExtraBody))
+		for key, value := range req.Model.ExtraBody {
+			if value == maskedToken {
+				if existing, ok := storedBody[key]; ok {
+					body[key] = existing
+				}
+				continue
+			}
+			body[key] = value
+		}
+		updates["extra_body"] = body
 	}
 
 	err = mm.modelStore.UpdateModel(modelID, username, updates)

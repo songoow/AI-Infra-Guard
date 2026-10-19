@@ -5,6 +5,184 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v4.6.6] - 2026-10-15
+
+### Added
+- **Agent-Scan**: Add Atlas Cloud provider preset (PR #706, 6a14a56a)
+- **Agent-Scan**: Add API Route provider preset (PR #697, c752770e)
+- **Agent-Scan**: Add memory/RAG poisoning detection skill (PR #429, a25426cb)
+- **CLI**: Add JSON scan output (PR #682, 3eb7b466)
+- **Dashboard**: Edit extra_headers / extra_body in the model dialog (PR #690, 57fad501)
+- **Eval**: Add BadPhoneAgent bilingual benchmark (PR #698, 0586cb9b)
+
+### Fixed
+- **Agent-Scan**: Stream SSE responses and stop at [DONE] instead of waiting for connection close (PR #708, 1e2c69d9)
+- **Models**: Surface terminal ChatStream errors to callers and scan status (PR #702, 1fa464c0)
+- **Models**: Abort instead of retrying after ChatStream emitted partial output (PR #695, 5c3b6a5e)
+- **Models**: Do not panic when a provider returns no choices (PR #692, 6380426f)
+- **Skill-Scan**: Recover missing tool-call args during discovery (PR #648, f74c6d78)
+- **Runner**: Classify severity with the vocabulary the data validator accepts (PR #694, 41bd1321)
+- **Dashboard**: Keep stored extra_headers / extra_body when the update sends the mask back (PR #689, 9f3e846b)
+
+### Changed
+- **Prompt-Security**: Drop LLM translation of report case fields (PR #703, 4ea64655)
+- **CI**: Add contributors-readme-action to auto-update contributors list (PR #696, 22b0d385)
+- **Test (Agent-Scan)**: Mock the streaming interface in the Atlas Cloud test (3879c190)
+
+### Contributors
+aigsec, nb213, wjl8636, li872, Devam Shah, helo060228, Truman, Yusheng, boyhack, ymsun2020, drow, DennyHo0917
+
+## [v4.6.5] - 2026-10-08
+
+### Added
+- **Agent-Scan**: Support custom transforms for SSE responses (PR #600, f59fbe14)
+- **MCP-Scan**: Support modern/legacy protocol auto-negotiation and record protocol version (PR #579, 890f21dd)
+- **Agent-Scan**: Add OrcaRouter as a first-class provider (PR #619, a7c9b006)
+- **Models**: Send extra headers and body fields to the model API (PR #669, ae6fc0d6)
+- **DeepTeam**: Resume an interrupted red team run (PR #668, a2ac397e)
+- **Data**: Add vulnerability rules [2026-09-25] — 154 CVE rules + 9 fingerprints (PR #679, 1f8ab6f2)
+- **Data**: Add vulnerability rules [2026-10-02] — 117 CVE rules + 5 fingerprints (PR #685, 62a939e1)
+
+### Fixed
+- **MCP-Scan**: Rate-limit aware retry for LLM calls (PR #651, 874d05b4)
+- **Agent-Scan**: Tool.inputSchema renamed to input_schema in mcp 2.0 (PR #614, baa3ec51)
+- **Parser**: Keep the pre-release label when normalizing versions (PR #626, 0f5bb1f7)
+- **Skill-Scan**: Keep fallback tool-call parameters with their own call (PR #684, 25e58f10)
+- **MCP-Scan, Agent-Scan**: Bound stalled streaming responses (PR #678, 63c2bd83)
+- **SARIF**: Preserve text remediation in valid results (PR #680, e9e6ed7b)
+- **Scanners**: Preserve findings during context compaction (PR #649, a468ee2c)
+- **DeepTeam**: RailFence crashes with IndexError when rails <= 1 (e39ec6ef)
+- **Skill file**: Fix formatting of description in SKILL.md (PR #580, 8f84377e)
+
+### Changed
+- **CI**: Run the Go test suite on push and pull requests (PR #677, ff824825)
+- **Test**: Make agent websocket go test build and pass on main (PR #674, 51d63e24)
+
+### Contributors
+ichaobuster, BeYoungD, Pawar Priyank, Elwood Zonghao Ying (NY1024), lovejones2914-spec, monem, helo060228, feiyang, Chen Yufeiyang, Jin, Linxiushen (林SO), BevKim, dvd233
+
+## [v4.6.4] - 2026-10-01
+
+### Added
+- **Research**: Vendor pikit (https://github.com/NY1024/pikit), a composable prompt-injection research toolkit, under Research/pikit (fe84b853, PR #681)
+
+### Fixed
+- **Skill-Scan**: Forward optional reasoning effort to the model API (PR #676, 14beb9b9)
+
+### Changed
+- **Docs**: Update Research/pikit README (9f889209)
+
+### Contributors
+Elwood Zonghao Ying (NY1024), Patrick Erichsen
+
+## [v4.6.3] - 2026-09-24
+
+### Added
+- **DeepTeam**: Write finished test cases to disk during a run (#653)
+- **API Checker**: Refill failed fingerprint samples for more reliable model identification
+
+### Fixed
+- **API Checker**: Support Claude 5 signatures (PR #667)
+- **Prompt-Eval**: Rate-limit aware backoff, circuit breaker and process-group termination
+- **Prompt-Eval**: Share rate-limit counter between breaker and model, harden Retry-After parsing
+- **Prompt-Eval**: Hoist 'import re' to module top level
+
+### Changed
+- **Research (forge_bench)**: Document dataset organization and evaluation-set guidance (PR #662)
+- **Docs**: Add FORGE-Bench and RogueHandoff-20 to Research list (PR #661)
+- **Docs**: Sync FORGE-Bench and RogueHandoff-20 Research entries across 8 language READMEs
+- **Docs**: Add v4.6.2 What's New entry across all 9 README languages (PR #660)
+- **Test (agent-scan)**: Pin the detection-skill registration contract (#664)
+
+### Contributors
+Elwood Zonghao Ying (NY1024), xiangfanwu, KEXNA, Devam Shah, helo060228, aigsec, aig-doc-bot
+
+## [v4.6.2] - 2026-09-17
+
+### Added
+- **Research**: Add FORGE-Bench (forge_bench) — deterministic Loss-of-Control benchmark for autonomous agents
+- **Research**: Add clean RogueHandoff-20 benchmark under Research
+- **Data**: Add AIG rules [2026-09-11]
+- **Skill-Scan**: Bump aig-skill-scan to 0.2.2 (#656)
+
+### Fixed
+- **Skill-Scan**: Reduce evidence-free false positives (PR #652)
+- **Skill-Scan**: Prevent model tool-call stalls and bound stalled streaming responses
+- **Skill-Scan**: Reconcile verdicts with public findings (PR #652)
+- **Extract-Vuln**: Strip CDATA wrapper and accept common tag aliases (PR #655)
+- **Data**: Flatten cvss map to string format to match upstream schema
+- **Data**: Resolve 12 YAML validation failures
+- **Data**: Remove redundant n8n.yaml fingerprint (upstream has n8n.io.yaml)
+
+### Changed
+- **Research (forge_bench)**: Built-in OpenAI-compatible client, bilingual README, and quickstart (PR #658)
+- **Docs**: Document English-only contributor text and canonical input language policy
+- **Docs**: Add v4.6.1 What's New entry across all 9 README languages
+- **Docs**: Revert CATL logo acknowledgement added to all README languages (PR #654/#659)
+
+### Contributors
+Elwood Zonghao Ying (NY1024), xiangfanwu, aigsec, AIG-Bot, boy-hack, pythoncheng, feiyang, aig-doc-bot
+
+## [v4.6.1] - 2026-09-10
+
+### Added
+- **API Checker**: Add Gemini, Gemma, and GLM fingerprints
+- **API Checker**: Update GLM-5.3-Flash fingerprint baseline
+- **API Checker**: Update baseline tests
+
+### Fixed
+- **MCP-Scan**: Adapt to MCP Python SDK 2.x API changes (PR #606)
+- **MCP-Scan**: Cast read_timeout_seconds to float for SDK 2.x type safety
+- **MCP-Scan**: Mark empty scan results as possibly-incomplete (PR #623)
+- **MCP-Scan**: Preserve security findings in context compaction prompt
+- **MCP-Scan**: Always set scanNote in result_meta and log in English
+- **MCP-Scan**: Surface the underlying error when MCP connection fails (PR #534)
+- **Skill-Scan**: Stop silently hiding .pyc files and skip-dir payloads
+- **Task API**: Add skill_scan task type
+- **Parser**: Keep pre-release versions below their release in versionCheck (PR #588)
+- **Data**: Correct mislabeled product names for CVE-2026-13236/13237/61428 (PR #642)
+- **Docker**: Use Tencent Debian mirror for agent build
+
+### Changed
+- **Docs**: Add CONTRIBUTING, CODE_OF_CONDUCT, issue/PR templates
+- **Docs**: Update skill-scan README pre_scan capability description
+- **Docs**: Update task API comment clarifying attachments priority in skill_scan
+- **Docs**: Generalize relay consistency check in API Checker docs
+
+### Contributors
+Elwood Ying, xiangfanwu, aig-doc-bot, valleyxht, kexinoh, zhuque, pucedoteth, glatinone, chaucerj, boy-hack, Ray Winkelman, KEXNA
+
+## [v4.6.0] - 2026-08-26
+
+### Added
+- **API Checker**: New API security audit module with web proxy integration, unified CLI command, and detection algorithms (PR #511)
+- **LLM API Poisoning Detection**: New detection for LLM API poisoning attacks (PR #568)
+- **Agent-Scan (aig-agent-redteam)**: v5.0.0 mutation engine refactor, merge workflow-attack into mutation-attack
+- **YAML Validation**: Strict validation for required ID and severity fields in vulnerability rules
+- **Research**: DeepSeek Harness prompt injection assessment
+- **Data**: AIG rules [2026-08-07] and [2026-08-14]
+
+### Fixed
+- **MCP**: Migrate clients to SDK 2.0; fix streamable_http_client headers param incompatibility with MCP SDK 1.28+
+- **MCP-Scan**: Strip lone surrogates from non-UTF-8 filenames; use timedelta for ClientSession read_timeout_seconds
+- **Skill-Scan**: Strip lone surrogates to prevent JSON serialization crash
+- **Data**: Remove case-colliding duplicate vulnerability rules; escape credential-like reference labels
+- **PromptSecurity**: Add missing httpx dependency; stop double-translating case.reason; translate jailbreak report content
+- **Agent**: Extract pure URL from user input for MCP scan server_url
+- **Agent-Scan**: Localize step titles like MCP Scan
+- **i18n**: Honor selected report language for AI Infra Scan CVE data
+- **Parser**: Prevent panic on malformed advisory version rules
+- **Docker**: Restore published image compose compatibility; use uv sync for agent-scan Python deps
+- **API Checker**: Preserve weighted audit deductions
+- **YAML Check**: Validate Info.Name, reject empty severity, restore EOF newline
+
+### Changed
+- **Docs**: Add OpenClaw Recommended badge, expand Research & Papers section, update CVE count 1900+ → 2000+, update component table (4 new components, 14 CVE count updates), update model recommendations (GLM 5.3, Kimi K3)
+- **Refactor**: Embed API checker in agent Docker image
+
+### Contributors
+AIG-Bot, Elwood Ying, Flynn Joe, Louis, Zeding Zhang, aig-doc-bot, aigsec, ajay.kumar, donglige, fei, feiyang, ichaobuster, rootkiller6788, xiangfanwu, zhuque
+
 ## [v4.5.1] - 2026-07-30
 
 ### Added

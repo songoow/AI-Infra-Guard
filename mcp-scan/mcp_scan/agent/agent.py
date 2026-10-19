@@ -22,6 +22,7 @@ from typing import Any
 
 from mcp_scan.agent.base_agent import BaseAgent
 from mcp_scan.tools.dispatcher import ToolDispatcher
+from mcp_scan.utils import strip_surrogates
 from mcp_scan.utils.aig_logger import mcpLogger
 from mcp_scan.utils.extract_vuln import VulnerabilityExtractor, extract_result
 from mcp_scan.utils.loging import logger
@@ -82,10 +83,12 @@ def _build_repo_tree(repo_dir: str, max_files: int = 200) -> str:
                 continue
             if total >= max_files:
                 lines.append(f"{indent}  ... (超过 {max_files} 个文件，已截断)")
-                return "\n".join(lines)
+                return strip_surrogates("\n".join(lines))
             lines.append(f"{indent}  {fname}")
             total += 1
-    return "\n".join(lines)
+    # Non-UTF-8 filenames surface as lone surrogates (surrogateescape); strip
+    # them so the tree can be serialized to JSON for the LLM request.
+    return strip_surrogates("\n".join(lines))
 
 
 _LANGUAGE_DIRECTIVE_EN = """
@@ -304,6 +307,27 @@ class ScanPipeline:
         return result
 
 
+def _warn_if_scan_incomplete(raw_output: str, vuln_results: list, result_meta: dict) -> None:
+    """Mark the scan as possibly-incomplete when both the raw audit output and the
+    extracted vulnerability list are empty.
+
+    Typical scenario: after context compaction drops the accumulated analysis
+    state, the agent finishes with empty output, and calc_mcp_score([]) turns
+    that into a clean "score: 100, no vulnerabilities found" report. Setting an
+    explicit marker keeps empty reports from being misread as "safe".
+    """
+    if vuln_results or (raw_output or "").strip():
+        # Set scanNote explicitly on complete scans too, so consumers can rely
+        # on the key always being present instead of inferring absence == complete.
+        result_meta.setdefault("scanNote", "complete")
+        return
+    logger.warning(
+        "Scan may be incomplete: audit produced no output; "
+        "do not interpret empty results as 'no vulnerabilities found'"
+    )
+    result_meta["scanNote"] = "possibly-incomplete"
+
+
 class Agent:
     """aig-mcp-scan's main Agent, entry point for the scan pipeline.
 
@@ -449,6 +473,7 @@ markdown格式返回
                 "results": vuln_results,
             }
         )
+        _warn_if_scan_incomplete(audit_result, vuln_results, result_meta)
         mcpLogger.result_update(result_meta)
         return result_meta
 
@@ -572,6 +597,7 @@ markdown格式返回
                 "results": vuln_results,
             }
         )
+        _warn_if_scan_incomplete(vuln_review, vuln_results, result_meta)
         mcpLogger.result_update(result_meta)
         return result_meta
 
@@ -583,6 +609,9 @@ markdown格式返回
             "start_time": time.time(),
             "end_time": 0,
             "results": [],
+            "mcp_protocol_version": "",
+            "mcp_negotiation_type": "",
+            "mcp_transport": "",
         }
 
         if self.language == "en":
@@ -709,5 +738,16 @@ You MUST write all content in English.
                 "results": vuln_results,
             }
         )
+
+        # 记录实际协商的 MCP 协议版本和传输类型
+        if (
+            self.dispatcher
+            and self.dispatcher.mcp_tools_manager
+        ):
+            mgr = self.dispatcher.mcp_tools_manager
+            result_meta["mcp_protocol_version"] = mgr.negotiated_protocol_version or ""
+            result_meta["mcp_negotiation_type"] = mgr.negotiation_type or ""
+            result_meta["mcp_transport"] = mgr.transport or ""
+
         mcpLogger.result_update(result_meta)
         return result_meta

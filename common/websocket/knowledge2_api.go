@@ -1019,16 +1019,17 @@ var agentScanClassifierSkills = map[string]bool{
 // the default set executed when the caller does not pick specific rules. Keep
 // this list in sync with that Python constant.
 var agentScanRecommendedSkills = map[string]bool{
-	"data-leakage-detection":                true,
-	"tool-abuse-detection":                  true,
-	"indirect-injection-detection":          true,
-	"authorization-bypass-detection":        true,
-	"web-exfiltration-detection":            true,
-	"agentic-supply-chain-detection":        true,
-	"unexpected-code-execution-detection":   true,
-	"inter-agent-comm-security-detection":   true,
-	"cascading-failure-detection":           true,
-	"human-agent-trust-exploit-detection":   true,
+	"data-leakage-detection":              true,
+	"tool-abuse-detection":                true,
+	"indirect-injection-detection":        true,
+	"authorization-bypass-detection":      true,
+	"web-exfiltration-detection":          true,
+	"agentic-supply-chain-detection":      true,
+	"unexpected-code-execution-detection": true,
+	"inter-agent-comm-security-detection": true,
+	"cascading-failure-detection":         true,
+	"human-agent-trust-exploit-detection": true,
+	"memory-rag-poisoning-detection":      true,
 }
 
 // AgentSkill is one selectable detection rule returned to the frontend.
@@ -1079,6 +1080,12 @@ func titleFromSkillName(name string) string {
 
 // HandleAgentSkills lists the agent-scan detection rules (skills) available for
 // selective or full-coverage scanning. Classifier-only skills are excluded.
+// @Summary List Agent Scan detection rules
+// @Description Returns selectable detection rules, with recommended defaults first. Classifier-only skills are excluded.
+// @Tags knowledge
+// @Produce json
+// @Success 200 {object} object{skills=[]AgentSkill}
+// @Router /api/v1/knowledge/agent/skills [get]
 func HandleAgentSkills(c *gin.Context) {
 	entries, err := os.ReadDir(agentScanSkillsDir)
 	if err != nil {

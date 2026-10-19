@@ -38,7 +38,7 @@ from typing import Any
 TOOL_NAME = "aig-mcp-scan"
 SARIF_VERSION = "2.1.0"
 SARIF_SCHEMA_URI = (
-    "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/Schemata/sarif-schema-2.1.0.json"
+    "https://docs.oasis-open.org/sarif/sarif/v2.1.0/os/schemas/sarif-schema-2.1.0.json"
 )
 INFORMATION_URI = "https://github.com/Tencent/AI-Infra-Guard"
 
@@ -292,7 +292,10 @@ def to_sarif(result_meta: dict[str, Any], tool_version: str = "0.0.0", language:
             },
         }
         if suggestion:
-            result["fixes"] = [{"description": {"text": suggestion}}]
+            # SARIF fixes require concrete artifactChanges, not prose recommendations.
+            # Keep the guidance visible in viewers and available to JSON consumers.
+            result["message"]["text"] += f"\n\n{suggestion}"
+            result["properties"]["suggestion"] = suggestion
         results.append(result)
 
     # Ensure the full MCP01-MCP10 + supplementary classification is always declared,
@@ -331,6 +334,9 @@ def to_sarif(result_meta: dict[str, Any], tool_version: str = "0.0.0", language:
                     "llm": result_meta.get("llm"),
                     "startTime": result_meta.get("start_time"),
                     "endTime": result_meta.get("end_time"),
+                    # 扫描可能不完整时（如上下文压缩丢失状态导致空输出）显式标记，
+                    # 避免空报告被消费方误读为"未发现漏洞"。
+                    "scanNote": result_meta.get("scanNote", "complete"),
                 },
             }
         ],

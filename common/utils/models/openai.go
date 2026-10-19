@@ -26,6 +26,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -35,15 +36,32 @@ import (
 	"github.com/openai/openai-go"
 )
 
+// ChatStreamEvent carries either a text delta or a terminal error. An error event
+// has empty Text, is emitted exactly once on failure, and is followed by channel
+// closure. A clean completion closes the channel without an error event.
+type ChatStreamEvent struct {
+	Text string
+	Err  error
+}
+
 type AIModel interface {
-	ChatStream(ctx context.Context, history []map[string]string) <-chan string
+	// Callers must consume until closure or the terminal error, including after cancellation.
+	ChatStream(ctx context.Context, history []map[string]string) <-chan ChatStreamEvent
 }
 
 type OpenAI struct {
-	Key                string
-	BaseUrl            string
-	Model              string
-	UseToken           int64
+	Key      string
+	BaseUrl  string
+	Model    string
+	UseToken int64
+
+	// ExtraHeaders 会随每个请求发送，例如 OpenRouter 的
+	// HTTP-Referer / X-Title 路由头。
+	ExtraHeaders map[string]string
+	// ExtraBody 会合并进请求体 JSON。键支持点号路径，
+	// 例如 "provider.order" 会写成嵌套字段，这正是 OpenRouter
+	// 的 provider 路由与量化参数所需要的写法。
+	ExtraBody map[string]any
 }
 
 func NewOpenAI(key string, model string, url string) *OpenAI {
@@ -79,7 +97,24 @@ func (ai *OpenAI) clientOptions() []option.RequestOption {
 		option.WithAPIKey(ai.Key),
 		option.WithHTTPClient(ai.buildHTTPClient()),
 	}
+	// 排序只是让生成的选项顺序稳定，便于测试与排查。
+	for _, key := range sortedKeys(ai.ExtraHeaders) {
+		opts = append(opts, option.WithHeader(key, ai.ExtraHeaders[key]))
+	}
+	for _, key := range sortedKeys(ai.ExtraBody) {
+		opts = append(opts, option.WithJSONSet(key, ai.ExtraBody[key]))
+	}
 	return opts
+}
+
+// sortedKeys 返回 map 的键并按字典序排列。
+func sortedKeys[V any](values map[string]V) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // 验证OpenAI是否可用
@@ -103,9 +138,9 @@ func (ai *OpenAI) Vaild(ctx context.Context) error {
 	}
 	return nil
 }
-func (ai *OpenAI) ChatStream(ctx context.Context, history []map[string]string) <-chan string {
+func (ai *OpenAI) ChatStream(ctx context.Context, history []map[string]string) <-chan ChatStreamEvent {
 	client := openai.NewClient(ai.clientOptions()...)
-	resp := make(chan string)
+	resp := make(chan ChatStreamEvent)
 	chatMessages := make([]openai.ChatCompletionMessageParamUnion, 0)
 	for _, item := range history {
 		role := item["role"]
@@ -121,23 +156,37 @@ func (ai *OpenAI) ChatStream(ctx context.Context, history []map[string]string) <
 	const maxRetries = 3
 	go func() {
 		defer close(resp)
-		var totalToken int64 = 0
+		var totalToken int64
+		var terminalErr error
+		defer func() {
+			if totalToken > 0 {
+				ai.UseToken += totalToken
+			}
+			if terminalErr != nil {
+				resp <- ChatStreamEvent{Err: terminalErr}
+			}
+		}()
 		for attempt := 0; attempt < maxRetries; attempt++ {
 			if attempt > 0 {
 				waitSec := time.Duration(1<<attempt) * time.Second // 2s, 4s
 				gologger.Infof("ChatStream retry %d/%d after %v", attempt, maxRetries-1, waitSec)
 				select {
 				case <-ctx.Done():
+					terminalErr = ctx.Err()
 					return
 				case <-time.After(waitSec):
 				}
+			}
+			if err := ctx.Err(); err != nil {
+				terminalErr = err
+				return
 			}
 			stream := client.Chat.Completions.NewStreaming(ctx, openai.ChatCompletionNewParams{
 				Messages: chatMessages,
 				Seed:     openai.Int(24),
 				Model:    ai.Model,
 			})
-			streamErr := false
+			emitted := false
 			for stream.Next() {
 				evt := stream.Current()
 				if len(evt.Choices) > 0 {
@@ -145,19 +194,42 @@ func (ai *OpenAI) ChatStream(ctx context.Context, history []map[string]string) <
 					if evt.Usage.TotalTokens > 0 {
 						totalToken = evt.Usage.TotalTokens
 					}
-					resp <- word
+					select {
+					case resp <- ChatStreamEvent{Text: word}:
+					case <-ctx.Done():
+						stream.Close()
+						terminalErr = ctx.Err()
+						return
+					}
+					if word != "" {
+						emitted = true
+					}
 				}
 			}
-			if stream.Err() != nil {
-				gologger.WithError(stream.Err()).Errorf("ChatStream error (attempt %d/%d)", attempt+1, maxRetries)
-				streamErr = true
+			err := stream.Err()
+			stream.Close()
+			if ctx.Err() != nil {
+				terminalErr = ctx.Err()
+				return
 			}
-			if !streamErr {
-				break
+			if err != nil {
+				if emitted {
+					// Deltas already handed to the caller cannot be taken back.
+					// Retrying from scratch would replay the whole response on top
+					// of the partial text the consumer already accumulated, so a
+					// mid-stream failure after partial output is terminal (#693).
+					gologger.WithError(err).Errorf("ChatStream failed mid-stream after partial output; aborting without retry to avoid duplicated content (attempt %d/%d)", attempt+1, maxRetries)
+					terminalErr = err
+					return
+				}
+				gologger.WithError(err).Errorf("ChatStream error (attempt %d/%d)", attempt+1, maxRetries)
+				if attempt == maxRetries-1 {
+					terminalErr = err
+					return
+				}
+				continue
 			}
-		}
-		if totalToken > 0 {
-			ai.UseToken += totalToken
+			break
 		}
 	}()
 	return resp
@@ -169,7 +241,10 @@ func (ai *OpenAI) ChatResponse(ctx context.Context, prompt string) (string, erro
 	}
 	var ret string
 	for resp := range ai.ChatStream(ctx, history) {
-		ret += resp
+		ret += resp.Text
+		if resp.Err != nil {
+			return ret, resp.Err
+		}
 	}
 	return ret, nil
 }
@@ -206,6 +281,11 @@ func (ai *OpenAI) ChatWithImage(ctx context.Context, prompt string, imagePath st
 	if err != nil {
 		return "", err
 	}
+	// 网关可能返回 200 但 choices 为空（内容过滤命中、上游错误被包装成 200），
+	// 与 Vaild 保持一致：这是错误，不是 panic。
+	if len(completion.Choices) == 0 {
+		return "", errors.New("no response")
+	}
 	return completion.Choices[0].Message.Content, nil
 }
 
@@ -232,6 +312,11 @@ func (ai *OpenAI) ChatWithImageByte(ctx context.Context, prompt string, imageDat
 	if err != nil {
 		return "", err
 	}
+	// 网关可能返回 200 但 choices 为空（内容过滤命中、上游错误被包装成 200），
+	// 与 Vaild 保持一致：这是错误，不是 panic。
+	if len(completion.Choices) == 0 {
+		return "", errors.New("no response")
+	}
 	return completion.Choices[0].Message.Content, nil
 }
 
@@ -246,7 +331,7 @@ func (ai *OpenAI) ResetToken() {
 func GetJsonString(data string) string {
 	startIndex := strings.Index(data, "```json")
 	endIndex := strings.LastIndex(data, "```")
-	if startIndex >= 0 && endIndex > 0 {
+	if startIndex >= 0 && endIndex >= startIndex+7 {
 		return data[startIndex+7 : endIndex]
 	}
 	return data
